@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#09090d" />
+    <title>Recreate Necklace Try-On</title>
+
+    <!-- Three.js r136: this is the global THREE version used by the WebAR.Rocks helper. -->
+    <script src="libs/three/v136/build/three.js"></script>
+    <script src="libs/three/v136/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="libs/three/v136/examples/js/loaders/RGBELoader.js"></script>
+
+    <!-- Postprocessing scripts. The shell only verifies them; later TAA uses these globals. -->
+    <script src="libs/three/v136/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="libs/three/v136/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="libs/three/v136/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="libs/three/v136/examples/js/shaders/CopyShader.js"></script>
+    <script src="libs/three/v136/examples/js/postprocessing/SSAARenderPass.js"></script>
+    <script src="libs/three/v136/examples/js/postprocessing/TAARenderPass.js"></script>
+
+    <!-- WebAR.Rocks.face engine, Three helper, and landmark stabilizer. -->
+    <script src="dist/WebARRocksFace.js"></script>
+    <script src="helpers/WebARRocksFaceThreeHelper.js"></script>
+    <script src="helpers/landmarksStabilizers/OneEuroLMStabilizer.js"></script>
+
+    <!-- Our clean rebuild entry point. Phase 6 adds custom pendant product plane. -->
+    <script src="recreate-necklace.js"></script>
+
+    <style>
+      :root {
+        --bg: #09090d;
+        --panel: rgba(18, 18, 24, 0.78);
+        --line: rgba(255, 255, 255, 0.12);
+        --gold: #d9b35c;
+        --text: #f4f4f6;
+        --muted: #a7a7b1;
+        --ok: #7bd88f;
+        --warn: #ffcf70;
+        --bad: #ff7b7b;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+
+      /*
+       * The real demo stacks the WebAR.Rocks camera canvas and the Three.js
+       * overlay canvas. We keep the same DOM and transform from day one so
+       * later tracking/rendering code does not need a layout rewrite.
+       */
+      #WebARRocksFaceCanvas,
+      #threeCanvas {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        width: 100vw;
+        height: calc(100vw * 9 / 16);
+        max-width: calc(100vh * 16 / 9);
+        max-height: 100vh;
+        transform: translate(-50%, -50%) rotateY(180deg);
+      }
+
+      #WebARRocksFaceCanvas {
+        z-index: 0;
+        background:
+          linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+          #050507;
+        background-size: 48px 48px;
+      }
+
+      #threeCanvas {
+        z-index: 1;
+        pointer-events: none;
+      }
+
+      .debug-toggle {
+        position: fixed;
+        z-index: 4;
+        top: 50%;
+        right: calc(14px + env(safe-area-inset-right));
+        width: 44px;
+        height: 44px;
+        border: 1px solid var(--line);
+        border-radius: 50%;
+        background: var(--panel);
+        color: var(--text);
+        font-size: 18px;
+        line-height: 1;
+        cursor: pointer;
+        backdrop-filter: blur(10px);
+      }
+
+      .debug-drawer {
+        position: fixed;
+        z-index: 5;
+        top: calc(16px + env(safe-area-inset-top));
+        right: calc(16px + env(safe-area-inset-right));
+        width: min(340px, calc(100vw - 32px));
+        max-height: calc(100vh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(18, 18, 24, 0.9);
+        color: var(--text);
+        backdrop-filter: blur(12px);
+        transform: translateX(calc(100% + 24px));
+        transition: transform 0.18s ease;
+        overflow: auto;
+      }
+
+      .debug-drawer.is-open {
+        transform: translateX(0);
+      }
+
+      .debug-drawer__header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+
+      .debug-drawer__title {
+        margin: 0;
+        color: var(--gold);
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .debug-close {
+        appearance: none;
+        cursor: pointer;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--text);
+        width: 32px;
+        height: 32px;
+        font: inherit;
+        font-size: 16px;
+        line-height: 1;
+      }
+
+      .debug-preview-wrap {
+        position: relative;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #050507;
+        aspect-ratio: 16 / 9;
+      }
+
+      #debugPreviewCanvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+
+      .debug-stats {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin: 10px 0;
+      }
+
+      .debug-stat {
+        min-width: 0;
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.045);
+      }
+
+      .debug-stat__label {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--muted);
+        font-size: 10px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .debug-stat__value {
+        display: block;
+        overflow: hidden;
+        color: var(--text);
+        font-size: 13px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .debug-option {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--text);
+        font-size: 13px;
+      }
+
+      .debug-option input {
+        width: 16px;
+        height: 16px;
+      }
+
+      .product-strip {
+        position: fixed;
+        z-index: 4;
+        left: calc(16px + env(safe-area-inset-left));
+        bottom: calc(16px + env(safe-area-inset-bottom));
+        display: flex;
+        gap: 10px;
+        width: min(360px, calc(100vw - 32px));
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        backdrop-filter: blur(10px);
+      }
+
+      .product-button {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.045);
+        color: var(--text);
+        cursor: pointer;
+        font: inherit;
+        text-align: left;
+      }
+
+      .product-button.is-active {
+        border-color: rgba(217, 179, 92, 0.85);
+        background: rgba(217, 179, 92, 0.14);
+      }
+
+      .product-button img {
+        flex: 0 0 auto;
+        width: 34px;
+        height: 34px;
+        object-fit: contain;
+      }
+
+      .product-button span {
+        min-width: 0;
+        overflow: hidden;
+        font-size: 12px;
+        font-weight: 700;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .vto-controls {
+        position: fixed;
+        z-index: 4;
+        right: calc(16px + env(safe-area-inset-right));
+        bottom: calc(16px + env(safe-area-inset-bottom));
+        width: min(260px, calc(100vw - 32px));
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        backdrop-filter: blur(10px);
+      }
+
+      .vto-info {
+        display: grid;
+        gap: 2px;
+        margin-bottom: 8px;
+      }
+
+      .vto-info__name {
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .vto-info__meta {
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .vto-control-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .tool-button {
+        appearance: none;
+        min-height: 36px;
+        cursor: pointer;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--text);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .tool-button.is-active {
+        border-color: rgba(217, 179, 92, 0.85);
+        background: rgba(217, 179, 92, 0.18);
+      }
+
+      .tool-button--wide {
+        width: 100%;
+      }
+
+      .start-button {
+        margin-bottom: 8px;
+      }
+
+      @media (max-width: 520px) {
+        .debug-toggle {
+          top: auto;
+          right: auto;
+          left: calc(min(358px, calc(100vw - 32px)) - 28px);
+          bottom: calc(166px + env(safe-area-inset-bottom));
+        }
+
+        .debug-drawer {
+          left: calc(16px + env(safe-area-inset-left));
+          right: auto;
+          width: min(358px, calc(100vw - 32px));
+        }
+
+        .vto-controls {
+          left: calc(16px + env(safe-area-inset-left));
+          right: auto;
+          bottom: calc(96px + env(safe-area-inset-bottom));
+          width: min(358px, calc(100vw - 32px));
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="WebARRocksFaceCanvas" width="1280" height="720"></canvas>
+    <canvas id="threeCanvas" width="1280" height="720"></canvas>
+
+    <button
+      class="debug-toggle"
+      id="debugToggle"
+      type="button"
+      aria-controls="debugDrawer"
+      aria-expanded="false"
+      title="Open debug preview"
+    >
+      DBG
+    </button>
+
+    <aside class="debug-drawer" id="debugDrawer" aria-label="Tracking debug preview">
+      <div class="debug-drawer__header">
+        <h2 class="debug-drawer__title">Tracking Debug</h2>
+        <button class="debug-close" id="debugClose" type="button" title="Close debug preview">x</button>
+      </div>
+      <div class="debug-preview-wrap">
+        <canvas id="debugPreviewCanvas" width="320" height="180"></canvas>
+      </div>
+      <div class="debug-stats" aria-label="Tracking stats">
+        <div class="debug-stat">
+          <span class="debug-stat__label">Status</span>
+          <span class="debug-stat__value" id="debugStatus">Idle</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Score</span>
+          <span class="debug-stat__value" id="debugScore">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Landmarks</span>
+          <span class="debug-stat__value" id="debugLandmarks">0</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Chain</span>
+          <span class="debug-stat__value" id="debugChain">Off</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Pendant</span>
+          <span class="debug-stat__value" id="debugPendant">Off</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Follower Y</span>
+          <span class="debug-stat__value" id="debugFollowerY">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Follower Rot X</span>
+          <span class="debug-stat__value" id="debugFollowerRotX">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Pose Parent Y</span>
+          <span class="debug-stat__value" id="debugPoseParentY">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Pose Pitch</span>
+          <span class="debug-stat__value" id="debugPosePitch">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Group Y</span>
+          <span class="debug-stat__value" id="debugGroupY">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Comp Y</span>
+          <span class="debug-stat__value" id="debugCompY">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Pitch Comp</span>
+          <span class="debug-stat__value" id="debugPitchComp">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Frame dt</span>
+          <span class="debug-stat__value" id="debugDt">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Hook Order</span>
+          <span class="debug-stat__value" id="debugHookOrder">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Tracking Mode</span>
+          <span class="debug-stat__value" id="debugTrackingMode">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Chain Sim</span>
+          <span class="debug-stat__value" id="debugChainSim">None</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Peak Y Jump</span>
+          <span class="debug-stat__value" id="debugPeakYJump">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Peak Pitch Step</span>
+          <span class="debug-stat__value" id="debugPeakPitchStep">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Peak Comp Y</span>
+          <span class="debug-stat__value" id="debugPeakCompY">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Last 2s Y Jump</span>
+          <span class="debug-stat__value" id="debugPeak2sYJump">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Last 2s Pitch</span>
+          <span class="debug-stat__value" id="debugPeak2sPitch">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Peak Samples</span>
+          <span class="debug-stat__value" id="debugPeakSamples">0</span>
+        </div>
+      </div>
+      <button class="debug-close" id="debugResetPeaks" type="button" title="Reset motion peaks">Reset Peaks</button>
+      <label class="debug-option">
+        <input id="debugAxesToggle" type="checkbox" />
+        Show tracker axes on main view
+      </label>
+    </aside>
+
+    <div class="product-strip" id="productStrip" aria-label="Pendant selector"></div>
+
+    <section class="vto-controls" aria-label="Try-on controls">
+      <div class="vto-info">
+        <span class="vto-info__name" id="productInfoName">DN-0075-1</span>
+        <span class="vto-info__meta" id="productInfoMeta">Metal: white</span>
+      </div>
+      <button class="tool-button tool-button--wide start-button" id="startTracking" type="button">Start tracking</button>
+      <div class="vto-control-row" aria-label="Metal color">
+        <button class="tool-button" id="metalWhite" type="button" data-metal="white">White</button>
+        <button class="tool-button" id="metalYellow" type="button" data-metal="yellow">Yellow</button>
+      </div>
+      <div class="vto-control-row" aria-label="Pendant render mode">
+        <button class="tool-button" id="pendantModePng" type="button" data-pendant-mode="png">PNG</button>
+        <button class="tool-button" id="pendantModeGlb" type="button" data-pendant-mode="glb">3D</button>
+      </div>
+      <button class="tool-button tool-button--wide" id="captureButton" type="button">Capture</button>
+    </section>
+  </body>
+</html>

@@ -1,0 +1,16 @@
+[
+  {
+    "id": "dn-0075-1",
+    "name": "DN-0075-1",
+    "image": "custom/DN-0075-1-removebg.png",
+    "glb": "custom/DN-0075-3D.glb",
+    "metal": "white"
+  },
+  {
+    "id": "dn-0105-1",
+    "name": "DN-0105-1",
+    "image": "custom/DN-0105-1_removebg.png",
+    "glb": "custom/DN-0105-3d.glb",
+    "metal": "white"
+  }
+]

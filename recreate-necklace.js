@@ -351,6 +351,7 @@
     metal: 'white',
     captureError: null,
     debugDrawerOpen: false,
+    mobileMenuCollapsed: false,
     showDebugAxes: false,
     lastLandmarks: null,
     pendantPhys: {
@@ -2666,6 +2667,18 @@
     if (REFS.debugGroup) REFS.debugGroup.visible = STATE.showDebugAxes;
   }
 
+  function setMobileMenuCollapsed(isCollapsed) {
+    STATE.mobileMenuCollapsed = Boolean(isCollapsed);
+    const menu = document.getElementById('vtoMenu');
+    const toggle = document.getElementById('mobileMenuToggle');
+    if (menu) menu.classList.toggle('vto-menu--collapsed', STATE.mobileMenuCollapsed);
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', STATE.mobileMenuCollapsed ? 'false' : 'true');
+      toggle.textContent = STATE.mobileMenuCollapsed ? 'Controls' : 'Hide Controls';
+      toggle.title = STATE.mobileMenuCollapsed ? 'Show controls' : 'Hide controls';
+    }
+  }
+
   function resizeTrackingHelperIfReady() {
     if (!STATE.trackingStarted) return;
     if (
@@ -2834,6 +2847,7 @@
     const axesToggle = document.getElementById('debugAxesToggle');
     const resetPeaks = document.getElementById('debugResetPeaks');
     const captureButton = document.getElementById('captureButton');
+    const mobileMenuToggle = document.getElementById('mobileMenuToggle');
 
     if (button) button.addEventListener('click', startTracking);
     document.querySelectorAll('[data-metal]').forEach(function (metalButton) {
@@ -2865,6 +2879,12 @@
     }
     if (resetPeaks) {
       resetPeaks.addEventListener('click', resetMotionPeaks);
+    }
+    if (mobileMenuToggle) {
+      mobileMenuToggle.addEventListener('click', function () {
+        setMobileMenuCollapsed(!STATE.mobileMenuCollapsed);
+      });
+      setMobileMenuCollapsed(STATE.mobileMenuCollapsed);
     }
     window.addEventListener('keydown', handleGLBTransformDebugKey);
 

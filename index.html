@@ -33,8 +33,8 @@
     <style>
       :root {
         --bg: #09090d;
-        --panel: rgba(18, 18, 24, 0.78);
-        --line: rgba(255, 255, 255, 0.12);
+        --panel: rgba(18, 18, 24, 0.58);
+        --line: rgba(255, 255, 255, 0.14);
         --gold: #d9b35c;
         --text: #f4f4f6;
         --muted: #a7a7b1;
@@ -222,19 +222,51 @@
         height: 16px;
       }
 
-      .product-strip {
+      .vto-menu {
         position: fixed;
         z-index: 4;
-        left: calc(16px + env(safe-area-inset-left));
+        right: calc(16px + env(safe-area-inset-right));
         bottom: calc(16px + env(safe-area-inset-bottom));
-        display: flex;
-        gap: 10px;
         width: min(360px, calc(100vw - 32px));
-        padding: 8px;
         border: 1px solid var(--line);
         border-radius: 8px;
-        background: var(--panel);
-        backdrop-filter: blur(10px);
+        background: rgba(18, 18, 24, 0.52);
+        box-shadow: 0 14px 44px rgba(0, 0, 0, 0.18);
+        backdrop-filter: blur(16px) saturate(1.15);
+      }
+
+      .vto-menu__toggle {
+        display: none;
+        appearance: none;
+        width: 100%;
+        min-height: 34px;
+        cursor: pointer;
+        border: 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px 12px 0 0;
+        background: rgba(255, 255, 255, 0.055);
+        color: var(--text);
+        font: inherit;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .vto-menu__body {
+        display: grid;
+        gap: 8px;
+        padding: 10px;
+        transition:
+          max-height 0.2s ease,
+          opacity 0.16s ease,
+          transform 0.2s ease;
+      }
+
+      .product-strip {
+        display: flex;
+        gap: 8px;
+        width: 100%;
       }
 
       .product-button {
@@ -246,7 +278,7 @@
         padding: 6px;
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 8px;
-        background: rgba(255, 255, 255, 0.045);
+        background: rgba(255, 255, 255, 0.065);
         color: var(--text);
         cursor: pointer;
         font: inherit;
@@ -255,7 +287,7 @@
 
       .product-button.is-active {
         border-color: rgba(217, 179, 92, 0.85);
-        background: rgba(217, 179, 92, 0.14);
+        background: rgba(217, 179, 92, 0.2);
       }
 
       .product-button img {
@@ -275,16 +307,8 @@
       }
 
       .vto-controls {
-        position: fixed;
-        z-index: 4;
-        right: calc(16px + env(safe-area-inset-right));
-        bottom: calc(16px + env(safe-area-inset-bottom));
-        width: min(260px, calc(100vw - 32px));
-        padding: 10px;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: var(--panel);
-        backdrop-filter: blur(10px);
+        display: grid;
+        width: 100%;
       }
 
       .vto-info {
@@ -307,8 +331,8 @@
       .vto-control-row {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 8px;
-        margin-bottom: 8px;
+        gap: 6px;
+        margin-bottom: 6px;
       }
 
       .tool-button {
@@ -317,7 +341,7 @@
         cursor: pointer;
         border: 1px solid var(--line);
         border-radius: 8px;
-        background: rgba(255, 255, 255, 0.08);
+        background: rgba(255, 255, 255, 0.105);
         color: var(--text);
         font-size: 12px;
         font-weight: 700;
@@ -325,7 +349,7 @@
 
       .tool-button.is-active {
         border-color: rgba(217, 179, 92, 0.85);
-        background: rgba(217, 179, 92, 0.18);
+        background: rgba(217, 179, 92, 0.24);
       }
 
       .tool-button--wide {
@@ -350,11 +374,69 @@
           width: min(358px, calc(100vw - 32px));
         }
 
-        .vto-controls {
-          left: calc(16px + env(safe-area-inset-left));
-          right: auto;
-          bottom: calc(96px + env(safe-area-inset-bottom));
-          width: min(358px, calc(100vw - 32px));
+        .vto-menu {
+          left: 0;
+          right: 0;
+          bottom: 0;
+          width: 100vw;
+          border-right: 0;
+          border-bottom: 0;
+          border-left: 0;
+          border-radius: 12px 12px 0 0;
+          background: rgba(18, 18, 24, 0.48);
+        }
+
+        .vto-menu__toggle {
+          display: block;
+        }
+
+        .vto-menu__body {
+          gap: 6px;
+          max-height: 360px;
+          padding: 8px calc(10px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom))
+            calc(10px + env(safe-area-inset-left));
+          overflow: hidden;
+        }
+
+        .vto-menu.vto-menu--collapsed .vto-menu__body {
+          max-height: 0;
+          padding-top: 0;
+          padding-bottom: env(safe-area-inset-bottom);
+          opacity: 0;
+          transform: translateY(8px);
+          pointer-events: none;
+        }
+
+        .product-strip {
+          gap: 6px;
+        }
+
+        .product-button {
+          min-height: 42px;
+          gap: 6px;
+          padding: 5px;
+        }
+
+        .product-button img {
+          width: 30px;
+          height: 30px;
+        }
+
+        .product-button span,
+        .tool-button {
+          font-size: 11px;
+        }
+
+        .tool-button {
+          min-height: 34px;
+        }
+
+        .vto-info {
+          margin-bottom: 4px;
+        }
+
+        .start-button {
+          margin-bottom: 6px;
         }
       }
     </style>
@@ -495,23 +577,36 @@
       </label>
     </aside>
 
-    <div class="product-strip" id="productStrip" aria-label="Pendant selector"></div>
+    <div class="vto-menu" id="vtoMenu">
+      <button
+        class="vto-menu__toggle"
+        id="mobileMenuToggle"
+        type="button"
+        aria-controls="vtoMenuBody"
+        aria-expanded="true"
+      >
+        Hide Controls
+      </button>
+      <div class="vto-menu__body" id="vtoMenuBody">
+        <div class="product-strip" id="productStrip" aria-label="Pendant selector"></div>
 
-    <section class="vto-controls" aria-label="Try-on controls">
-      <div class="vto-info">
-        <span class="vto-info__name" id="productInfoName">DN-0075-1</span>
-        <span class="vto-info__meta" id="productInfoMeta">Metal: white</span>
+        <section class="vto-controls" aria-label="Try-on controls">
+          <div class="vto-info">
+            <span class="vto-info__name" id="productInfoName">DN-0075-1</span>
+            <span class="vto-info__meta" id="productInfoMeta">Metal: white</span>
+          </div>
+          <button class="tool-button tool-button--wide start-button" id="startTracking" type="button">Start tracking</button>
+          <div class="vto-control-row" aria-label="Metal color">
+            <button class="tool-button" id="metalWhite" type="button" data-metal="white">White</button>
+            <button class="tool-button" id="metalYellow" type="button" data-metal="yellow">Yellow</button>
+          </div>
+          <div class="vto-control-row" aria-label="Pendant render mode">
+            <button class="tool-button" id="pendantModePng" type="button" data-pendant-mode="png">PNG</button>
+            <button class="tool-button" id="pendantModeGlb" type="button" data-pendant-mode="glb">3D</button>
+          </div>
+          <button class="tool-button tool-button--wide" id="captureButton" type="button">Capture</button>
+        </section>
       </div>
-      <button class="tool-button tool-button--wide start-button" id="startTracking" type="button">Start tracking</button>
-      <div class="vto-control-row" aria-label="Metal color">
-        <button class="tool-button" id="metalWhite" type="button" data-metal="white">White</button>
-        <button class="tool-button" id="metalYellow" type="button" data-metal="yellow">Yellow</button>
-      </div>
-      <div class="vto-control-row" aria-label="Pendant render mode">
-        <button class="tool-button" id="pendantModePng" type="button" data-pendant-mode="png">PNG</button>
-        <button class="tool-button" id="pendantModeGlb" type="button" data-pendant-mode="glb">3D</button>
-      </div>
-      <button class="tool-button tool-button--wide" id="captureButton" type="button">Capture</button>
-    </section>
+    </div>
   </body>
 </html>

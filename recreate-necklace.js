@@ -78,6 +78,10 @@
     CHAIN_V_TAPER: 0.14,
     CHAIN_V_SHOULDER_LIFT: 5.0,
     CHAIN_V_POWER: 1.1,
+    // Rear-only tuck: pulls the side/back arc closer to the neck without moving the accepted front point.
+    REAR_ARC_START_COS: 0.22,
+    REAR_WIDTH_SCALE: 0.72,
+    REAR_DEPTH_SCALE: 0.96,
     CHAIN_THICK: 1.15,
     CHAIN_SEGMENTS: 320,
     CHAIN_RADIAL: 10,
@@ -91,9 +95,13 @@
     LINK_TUBULAR_SEGMENTS: 18,
     LINK_ALTERNATE_ROTATION: 1.5708,
     LINK_VISIBLE_FRONT_ONLY: false,
+    LINK_BACK_FADE_ENABLED: true,
+    LINK_BACK_FADE_START_COS: 0.2,
+    LINK_BACK_FADE_END_COS: -0.75,
+    LINK_BACK_MIN_ALPHA: 0.08,
     FRONT_DRAPE: 58,
     // Positive values lift the entire static chain loop in neck-local space.
-    CHAIN_Y_OFFSET: 0,
+    CHAIN_Y_OFFSET: 2,
     // Lower values reduce how far the front/bottom of the loop drops on the chest.
     FRONT_DROP_SCALE: 0.2,
     LOOP_SAMPLES: 170,
@@ -109,8 +117,8 @@
     OCCLUDER_Y_OFFSET: 0,
     FADE_ENABLED: true,
     // 0 = front depth, 1 = back/nape depth. The chain starts fading near the back.
-    FADE_START_FRAC: 0.78,
-    FADE_END_FRAC: 0.96,
+    FADE_START_FRAC: 0.62,
+    FADE_END_FRAC: 0.92,
     YAW_REST_ADAPT: 0.03,
     YAW_HIDE_SIGN: 1,
     // Pendant plane width in neck-local units. Height follows the PNG aspect ratio.
@@ -247,6 +255,7 @@
     linkAltQuat: new THREE.Quaternion(),
     linkMatrix: new THREE.Matrix4(),
     linkScale: new THREE.Vector3(1, 1, 1),
+    linkFadeAttr: null,
     chainShader: null,
     chainCurve: null,
     chainPoints: null,
@@ -912,6 +921,7 @@
       REFS.linkGeometry.dispose();
       REFS.linkGeometry = null;
     }
+    REFS.linkFadeAttr = null;
     if (REFS.linkMat) {
       REFS.linkMat.dispose();
       REFS.linkMat = null;
@@ -1501,12 +1511,23 @@
     const count = REFS.linkMesh.count;
     const frontOnly = PARAMS.LINK_VISIBLE_FRONT_ONLY;
     const denom = Math.max(1, count - 1);
+    const fadeStart = PARAMS.LINK_BACK_FADE_START_COS;
+    const fadeEnd = PARAMS.LINK_BACK_FADE_END_COS;
+    const fadeSpan = Math.max(0.0001, fadeStart - fadeEnd);
+    const minAlpha = THREE.MathUtils.clamp(PARAMS.LINK_BACK_MIN_ALPHA, 0, 1);
     for (let i = 0; i < count; i++) {
       let u = i / count;
       if (frontOnly) {
         u = 0.75 + (i / denom) * 0.5;
         if (u >= 1) u -= 1;
       }
+
+      // The curve starts at the pendant/front point. cosT near -1 is the rear/nape arc.
+      const cosT = Math.cos(u * Math.PI * 2);
+      const rearFade = PARAMS.LINK_BACK_FADE_ENABLED
+        ? smoothstep01((fadeStart - cosT) / fadeSpan)
+        : 0;
+      const linkAlpha = THREE.MathUtils.lerp(1, minAlpha, rearFade);
 
       REFS.chainCurve.getPointAt(u, REFS.linkPoint);
       REFS.chainCurve.getTangentAt(u, REFS.linkTangent).normalize();
@@ -1517,8 +1538,32 @@
       }
       REFS.linkMatrix.compose(REFS.linkPoint, REFS.linkQuat, REFS.linkScale);
       REFS.linkMesh.setMatrixAt(i, REFS.linkMatrix);
+      if (REFS.linkFadeAttr) {
+        REFS.linkFadeAttr.setX(i, linkAlpha);
+      }
     }
     REFS.linkMesh.instanceMatrix.needsUpdate = true;
+    if (REFS.linkFadeAttr) {
+      REFS.linkFadeAttr.needsUpdate = true;
+    }
+  }
+
+  function applyLinkBackFade(mat) {
+    if (!PARAMS.LINK_BACK_FADE_ENABLED || !mat) return;
+
+    mat.transparent = true;
+    mat.depthWrite = true;
+    mat.onBeforeCompile = function (shader) {
+      shader.vertexShader = 'attribute float aLinkFade;\nvarying float vLinkFade;\n' + shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        '#include <begin_vertex>\n  vLinkFade = aLinkFade;'
+      );
+      shader.fragmentShader = 'varying float vLinkFade;\n' + shader.fragmentShader.replace(
+        '#include <dithering_fragment>',
+        '#include <dithering_fragment>\n  gl_FragColor.a *= vLinkFade;'
+      );
+    };
+    mat.needsUpdate = true;
   }
 
   function buildChainLinks(group) {
@@ -1533,7 +1578,10 @@
         PARAMS.LINK_TUBULAR_SEGMENTS
       );
       REFS.linkGeometry.scale(PARAMS.LINK_SCALE_X, PARAMS.LINK_SCALE_Y, 1);
+      REFS.linkFadeAttr = new THREE.InstancedBufferAttribute(new Float32Array(count), 1);
+      REFS.linkGeometry.setAttribute('aLinkFade', REFS.linkFadeAttr);
       REFS.linkMat = createChainMetalMaterial();
+      applyLinkBackFade(REFS.linkMat);
       REFS.linkMesh = new THREE.InstancedMesh(REFS.linkGeometry, REFS.linkMat, count);
       REFS.linkMesh.name = 'Phase12LinkedChain';
       REFS.linkMesh.renderOrder = 10;
@@ -1999,11 +2047,18 @@
       const frontBlend = smoothstep01((cosT - PARAMS.CHAIN_V_FRONT_START) / (1 - PARAMS.CHAIN_V_FRONT_START));
       const frontShoulder = frontBlend * Math.pow(absSin, PARAMS.CHAIN_V_POWER);
       const vTaper = 1 - PARAMS.CHAIN_V_TAPER * frontShoulder;
-      const shapedX = sinSign * Math.min(1.18, sideProfile + sideInset) * vTaper * chainRadiusX;
+      const rearBlend = smoothstep01(
+        (PARAMS.REAR_ARC_START_COS - cosT) / (PARAMS.REAR_ARC_START_COS + 1)
+      );
+      // Rear-only scaling tucks the nape/side arc into the neck occluder.
+      // At cosT === 1 this is zero, so the pendant/front point stays fixed.
+      const rearWidthScale = THREE.MathUtils.lerp(1, PARAMS.REAR_WIDTH_SCALE, rearBlend);
+      const rearDepthScale = THREE.MathUtils.lerp(1, PARAMS.REAR_DEPTH_SCALE, rearBlend);
+      const shapedX = sinSign * Math.min(1.18, sideProfile + sideInset) * vTaper * chainRadiusX * rearWidthScale;
       const point = new THREE.Vector3(
         REFS.neck.centerX + shapedX,
         REFS.neck.yOf(cosT) + PARAMS.CHAIN_V_SHOULDER_LIFT * frontShoulder,
-        REFS.neck.centerZ + cosT * chainRadiusZ
+        REFS.neck.centerZ + cosT * chainRadiusZ * rearDepthScale
       );
       points.push(point);
       freedom.push(smoothstep01((cosT - PARAMS.SOFT_FRONT_PIN) / (1 - PARAMS.SOFT_FRONT_PIN)));

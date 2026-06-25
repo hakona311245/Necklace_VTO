@@ -47,6 +47,14 @@
     MAX_PITCH_COMP: 0.2,
     // In this neck-local model positive Y lifts the chain, so negative compensation damps upward jumps.
     COMPENSATION_Y_SIGN: -1,
+    // Very light correction for raw pose Y spikes that happen specifically during left/right yaw turns.
+    YAW_Y_STABILIZER_ENABLED: true,
+    YAW_Y_THRESHOLD: 3.0,
+    YAW_Y_STRENGTH: 0.45,
+    YAW_Y_MAX_COMP: 7.0,
+    YAW_STEP_THRESHOLD: 0.008,
+    YAW_Y_SMOOTHING: 0.22,
+    YAW_Y_RELEASE: 0.12,
     DEBUG_MOTION_LOG: false,
     MOTION_LOG_INTERVAL: 0.35,
     PEAK_WINDOW_SEC: 2,
@@ -86,7 +94,7 @@
     CHAIN_SEGMENTS: 320,
     CHAIN_RADIAL: 10,
     CHAIN_STYLE: 'links',
-    LINK_COUNT: 82,
+    LINK_COUNT: 92,
     LINK_RADIUS: 2.7,
     LINK_TUBE_RADIUS: 0.34,
     LINK_SCALE_X: 1.7,
@@ -100,10 +108,12 @@
     LINK_BACK_FADE_END_COS: -0.75,
     LINK_BACK_MIN_ALPHA: 0.08,
     FRONT_DRAPE: 58,
+    // Horizontal local offset for quick left/right visual calibration. Try small values like -3 or 3.
+    CHAIN_X_OFFSET: 0,
     // Positive values lift the entire static chain loop in neck-local space.
-    CHAIN_Y_OFFSET: 2,
+    CHAIN_Y_OFFSET: 3.5,
     // Lower values reduce how far the front/bottom of the loop drops on the chest.
-    FRONT_DROP_SCALE: 0.2,
+    FRONT_DROP_SCALE: 0.02,
     LOOP_SAMPLES: 170,
     SIDE_RAISE: 0.7,
     BACK_RAISE: 0.82,
@@ -326,6 +336,9 @@
     poseSmoothPitch: 0,
     posePrevPitch: 0,
     poseRestPitch: 0,
+    posePrevYaw: null,
+    posePrevLiveY: null,
+    yawYOffset: 0,
     poseOffsetY: 0,
     posePitchComp: 0,
     poseLastT: 0,
@@ -356,6 +369,10 @@
       followerRotX: null,
       poseParentY: null,
       posePitch: null,
+      yaw: null,
+      yawStep: null,
+      rawYDelta: null,
+      yawYCompensation: null,
       groupY: null,
       compensationY: null,
       pitchCompensation: null,
@@ -480,6 +497,11 @@
   function smoothstep01(value) {
     const x = THREE.MathUtils.clamp(value, 0, 1);
     return x * x * (3 - 2 * x);
+  }
+
+  function angleDelta(a, b) {
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
+    return Math.atan2(Math.sin(a - b), Math.cos(a - b));
   }
 
   function resetMotionPeaks() {
@@ -1597,6 +1619,9 @@
 
   function resetSoftChainVelocity() {
     if (!REFS.softCur || !REFS.softPrev) return;
+    STATE.yawYOffset = 0;
+    STATE.posePrevYaw = null;
+    STATE.posePrevLiveY = null;
     for (let i = 0; i < REFS.softCur.length; i++) {
       REFS.softPrev[i].copy(REFS.softCur[i]);
     }
@@ -2056,7 +2081,7 @@
       const rearDepthScale = THREE.MathUtils.lerp(1, PARAMS.REAR_DEPTH_SCALE, rearBlend);
       const shapedX = sinSign * Math.min(1.18, sideProfile + sideInset) * vTaper * chainRadiusX * rearWidthScale;
       const point = new THREE.Vector3(
-        REFS.neck.centerX + shapedX,
+        REFS.neck.centerX + shapedX + PARAMS.CHAIN_X_OFFSET,
         REFS.neck.yOf(cosT) + PARAMS.CHAIN_V_SHOULDER_LIFT * frontShoulder,
         REFS.neck.centerZ + cosT * chainRadiusZ * rearDepthScale
       );
@@ -2256,6 +2281,10 @@
     setText('debugFollowerRotX', formatDebugNumber(motion.followerRotX, 3));
     setText('debugPoseParentY', formatDebugNumber(motion.poseParentY, 2));
     setText('debugPosePitch', formatDebugNumber(motion.posePitch, 3));
+    setText('debugYaw', formatDebugNumber(motion.yaw, 3));
+    setText('debugYawStep', formatDebugNumber(motion.yawStep, 3));
+    setText('debugRawYDelta', formatDebugNumber(motion.rawYDelta, 2));
+    setText('debugYawYComp', formatDebugNumber(motion.yawYCompensation, 2));
     setText('debugGroupY', formatDebugNumber(motion.groupY, 2));
     setText('debugCompY', formatDebugNumber(motion.compensationY, 2));
     setText('debugPitchComp', formatDebugNumber(motion.pitchCompensation, 3));
@@ -2383,6 +2412,9 @@
 
     STATE.poseOffsetY += (0 - STATE.poseOffsetY) * 0.18;
     STATE.posePitchComp += (0 - STATE.posePitchComp) * 0.18;
+    STATE.yawYOffset = 0;
+    STATE.posePrevYaw = null;
+    STATE.posePrevLiveY = null;
     if (PARAMS.TRACKING_POSE_MODE === 'sourceRaw') {
       STATE.poseOffsetY = 0;
       STATE.posePitchComp = 0;
@@ -2396,6 +2428,10 @@
       detected: false,
       followerY: REFS.follower ? REFS.follower.position.y : null,
       followerRotX: REFS.follower ? REFS.follower.rotation.x : null,
+      yaw: null,
+      yawStep: null,
+      rawYDelta: null,
+      yawYCompensation: STATE.yawYOffset,
       groupY: REFS.necklaceGroup.position.y,
       compensationY: STATE.poseOffsetY,
       pitchCompensation: STATE.posePitchComp,
@@ -2405,11 +2441,64 @@
     });
   }
 
+  function resetYawYStabilizer(yaw, liveY) {
+    STATE.yawYOffset = 0;
+    STATE.posePrevYaw = Number.isFinite(yaw) ? yaw : null;
+    STATE.posePrevLiveY = Number.isFinite(liveY) ? liveY : null;
+  }
+
+  function updateYawYStabilizer(yaw, liveY, dt, stalledFrame) {
+    const result = {
+      yawStep: 0,
+      rawYDelta: 0,
+      yawYCompensation: STATE.yawYOffset || 0,
+    };
+
+    if (
+      !PARAMS.YAW_Y_STABILIZER_ENABLED ||
+      stalledFrame ||
+      !Number.isFinite(yaw) ||
+      !Number.isFinite(liveY)
+    ) {
+      resetYawYStabilizer(yaw, liveY);
+      result.yawYCompensation = STATE.yawYOffset;
+      return result;
+    }
+
+    if (!Number.isFinite(STATE.posePrevYaw) || !Number.isFinite(STATE.posePrevLiveY)) {
+      resetYawYStabilizer(yaw, liveY);
+      result.yawYCompensation = STATE.yawYOffset;
+      return result;
+    }
+
+    const yawStep = Math.abs(angleDelta(yaw, STATE.posePrevYaw));
+    const rawYDelta = liveY - STATE.posePrevLiveY;
+    const turnSpike = yawStep > PARAMS.YAW_STEP_THRESHOLD && rawYDelta > PARAMS.YAW_Y_THRESHOLD;
+    const target = turnSpike
+      ? -Math.min(
+          PARAMS.YAW_Y_MAX_COMP,
+          (rawYDelta - PARAMS.YAW_Y_THRESHOLD) * PARAMS.YAW_Y_STRENGTH
+        )
+      : 0;
+    const smoothing = turnSpike ? PARAMS.YAW_Y_SMOOTHING : PARAMS.YAW_Y_RELEASE;
+    const alpha = 1 - Math.pow(1 - THREE.MathUtils.clamp(smoothing, 0, 1), dt * 60);
+
+    STATE.yawYOffset += (target - STATE.yawYOffset) * alpha;
+    STATE.posePrevYaw = yaw;
+    STATE.posePrevLiveY = liveY;
+
+    result.yawStep = yawStep;
+    result.rawYDelta = rawYDelta;
+    result.yawYCompensation = STATE.yawYOffset;
+    return result;
+  }
+
   function applyTrackingPoseMode(upwardJump) {
     const applied = { y: 0, pitch: 0 };
     if (!REFS.necklaceGroup) return applied;
 
     const mode = PARAMS.TRACKING_POSE_MODE || 'sourceRaw';
+    const yawY = PARAMS.YAW_Y_STABILIZER_ENABLED ? STATE.yawYOffset : 0;
 
     if (mode === 'compensated') {
       applied.y = STATE.poseOffsetY;
@@ -2424,6 +2513,7 @@
       applied.pitch = STATE.posePitchComp * strength;
     }
 
+    applied.y += yawY;
     REFS.necklaceGroup.position.y = applied.y;
     REFS.necklaceGroup.rotation.x = applied.pitch;
     return applied;
@@ -2468,6 +2558,7 @@
       REFS.necklaceGroup.rotation.x = 0;
       resetMotionPeaks();
       resetSoftChainVelocity();
+      resetYawYStabilizer(yaw, liveY);
       resetPendantPendulum(yaw, pitch, roll);
       setMotionDebug({
         detected: true,
@@ -2475,6 +2566,10 @@
         followerRotX: followerRotX,
         poseParentY: liveY,
         posePitch: pitch,
+        yaw: yaw,
+        yawStep: 0,
+        rawYDelta: 0,
+        yawYCompensation: STATE.yawYOffset,
         groupY: 0,
         compensationY: 0,
         pitchCompensation: 0,
@@ -2520,6 +2615,7 @@
     );
     STATE.posePitchComp += (pitchComp - STATE.posePitchComp) * Math.min(1, alpha * 1.1);
 
+    const yawMotion = updateYawYStabilizer(yaw, liveY, dt, stalledFrame);
     const appliedPose = applyTrackingPoseMode(upwardJump);
     if (upwardJump > PARAMS.SOFT_SPIKE_Y_THRESHOLD) {
       dampSoftChainVelocity(PARAMS.SOFT_SPIKE_VELOCITY_DAMPING);
@@ -2540,6 +2636,10 @@
       followerRotX: followerRotX,
       poseParentY: liveY,
       posePitch: pitch,
+      yaw: yaw,
+      yawStep: yawMotion.yawStep,
+      rawYDelta: yawMotion.rawYDelta,
+      yawYCompensation: yawMotion.yawYCompensation,
       groupY: REFS.necklaceGroup.position.y,
       compensationY: appliedPose.y,
       pitchCompensation: appliedPose.pitch,

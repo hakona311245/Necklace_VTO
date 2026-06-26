@@ -3416,6 +3416,7 @@
     runDependencyChecks();
     bindControls();
     loadCatalog();
+    window.setTimeout(startTracking, 0);
     window.addEventListener('resize', handleResize);
     window.addEventListener('orientationchange', handleResize);
   });

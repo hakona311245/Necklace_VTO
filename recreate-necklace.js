@@ -32,7 +32,7 @@
     RIM_LIGHT_INTENSITY: 0.85,
     ROT_PITCH: 1.0,
     ROT_YAW: 0.7,
-    ROT_ROLL: 1.0,
+    ROT_ROLL: 0.88,
     // sourceRaw mirrors the reference demo: WebAR/solvePnP follower pose drives the necklace directly.
     // compensated keeps the old local Y/pitch correction for A/B debugging; hybrid applies it only on spikes.
     TRACKING_POSE_MODE: 'sourceRaw',
@@ -62,7 +62,7 @@
     NECK_CENTER_TRUST_NORM: 0.04,
     NECK_CENTER_REJECT_NORM: 0.1,
     NECK_CENTER_VISUAL_X_COMP_ENABLED: true,
-    NECK_CENTER_VISUAL_X_MAX_COMP: 4.0,
+    NECK_CENTER_VISUAL_X_MAX_COMP: 1.5,
     NECK_CENTER_VISUAL_X_SMOOTHING: 0.16,
     NECK_CENTER_VISUAL_X_SIGN: 1,
     MOTION_LOG_INTERVAL: 0.35,
@@ -95,7 +95,7 @@
     MOTION_GUARD_FREEDOM_SCALE: 0.42,
     CHAIN_GAP: 1.0,
     // Geometry-only chain shaping. These keep the front point centered while making side arcs less inward.
-    CHAIN_WIDTH_SCALE: 1.03,
+    CHAIN_WIDTH_SCALE: 1.06,
     CHAIN_DEPTH_SCALE: 0.94,
     CHAIN_SIDE_INSET: 0.025,
     CHAIN_CURVE_TENSION: 0.4,
@@ -137,7 +137,7 @@
     // Horizontal local offset for quick left/right visual calibration. Try small values like -3 or 3.
     CHAIN_X_OFFSET: 0,
     // Positive values lift the entire static chain loop in neck-local space.
-    CHAIN_Y_OFFSET: 7.0,
+    CHAIN_Y_OFFSET: 6.5,
     // Lower values reduce how far the front/bottom of the loop drops on the chest.
     FRONT_DROP_SCALE: 0.02,
     LOOP_SAMPLES: 170,

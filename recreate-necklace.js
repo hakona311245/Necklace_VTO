@@ -103,8 +103,8 @@
     // Geometry-only V shaping: keep the exact front point fixed, but taper/lift nearby shoulders.
     CHAIN_V_FRONT_START: 0.15,
     CHAIN_V_TAPER: 0.14,
-    CHAIN_V_SHOULDER_LIFT: 3.0,
-    CHAIN_V_POWER: 1.1,
+    CHAIN_V_SHOULDER_LIFT: 4.6,
+    CHAIN_V_POWER: 0.95,
     // Rear-only tuck: pulls the side/back arc closer to the neck without moving the accepted front point.
     REAR_ARC_START_COS: 0.3,
     REAR_WIDTH_SCALE: 0.65,
@@ -139,7 +139,7 @@
     // Positive values lift the entire static chain loop in neck-local space.
     CHAIN_Y_OFFSET: 6.5,
     // Lower values reduce how far the front/bottom of the loop drops on the chest.
-    FRONT_DROP_SCALE: 0.02,
+    FRONT_DROP_SCALE: 0.25,
     LOOP_SAMPLES: 170,
     SIDE_RAISE: 0.7,
     BACK_RAISE: 0.82,

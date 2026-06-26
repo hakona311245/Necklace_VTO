@@ -95,20 +95,20 @@
     MOTION_GUARD_FREEDOM_SCALE: 0.42,
     CHAIN_GAP: 1.0,
     // Geometry-only chain shaping. These keep the front point centered while making side arcs less inward.
-    CHAIN_WIDTH_SCALE: 1.06,
-    CHAIN_DEPTH_SCALE: 0.94,
+    CHAIN_WIDTH_SCALE: 1.16,
+    CHAIN_DEPTH_SCALE: 1.02,
     CHAIN_SIDE_INSET: 0.025,
     CHAIN_CURVE_TENSION: 0.4,
     SIDE_ARC_SMOOTHNESS: 0.82,
     // Geometry-only V shaping: keep the exact front point fixed, but taper/lift nearby shoulders.
     CHAIN_V_FRONT_START: 0.15,
-    CHAIN_V_TAPER: 0.14,
-    CHAIN_V_SHOULDER_LIFT: 4.6,
-    CHAIN_V_POWER: 0.95,
+    CHAIN_V_TAPER: 0.18,
+    CHAIN_V_SHOULDER_LIFT: 6.0,
+    CHAIN_V_POWER: 0.85,
     // Rear-only tuck: pulls the side/back arc closer to the neck without moving the accepted front point.
     REAR_ARC_START_COS: 0.3,
-    REAR_WIDTH_SCALE: 0.65,
-    REAR_DEPTH_SCALE: 0.88,
+    REAR_WIDTH_SCALE: 0.76,
+    REAR_DEPTH_SCALE: 0.96,
     CHAIN_THICK: 1.15,
     CHAIN_SEGMENTS: 320,
     CHAIN_RADIAL: 10,
@@ -124,8 +124,8 @@
     LINK_VISIBLE_FRONT_ONLY: true,
     // In front-only mode, render an open U around the front neck with a slight side wrap.
     // 0 is the pendant/front point. Keep this span conservative so the ends fade before the face/neck edge.
-    LINK_FRONT_ONLY_START_U: 0.725,
-    LINK_FRONT_ONLY_SPAN_U: 0.55,
+    LINK_FRONT_ONLY_START_U: 0.71,
+    LINK_FRONT_ONLY_SPAN_U: 0.58,
     LINK_FRONT_EDGE_FADE_ENABLED: true,
     LINK_FRONT_EDGE_FADE_FRAC: 0.18,
     LINK_FRONT_EDGE_MIN_ALPHA: 0.14,

@@ -251,6 +251,7 @@
     helper: null,
     scene: null,
     renderer: null,
+    camera: null,
     follower: null,
     neck: null,
     necklaceGroup: null,
@@ -304,6 +305,8 @@
     fadeScale: new THREE.Vector3(),
     fadeFwd: new THREE.Vector3(),
     poseEuler: new THREE.Euler(),
+    auditWorldPoint: new THREE.Vector3(),
+    auditProjectedPoint: new THREE.Vector3(),
     debugGroup: null,
     debugLight: null,
   };
@@ -380,15 +383,28 @@
       dt: null,
       hookOrder: '-',
       chainSim: 'none',
+      chainPointCount: null,
+      chainTopScreenY: null,
+      chainTopScreenX: null,
+      chainTopIndex: null,
+      chainFrontScreenY: null,
+      chainFrontScreenX: null,
+      chainMaxRestDev: null,
+      chainAvgRestDev: null,
+      chainFrontRestDev: null,
+      chainMaxWorldY: null,
+      chainFrontWorldY: null,
     },
     motionPeaks: {
       maxYJump: 0,
       maxPitchStep: 0,
       maxCompY: 0,
       maxGroupY: 0,
+      maxChainRestDev: 0,
       last2sYJump: 0,
       last2sPitchStep: 0,
       last2sCompY: 0,
+      last2sChainRestDev: 0,
       samples: [],
     },
     motionLogLastT: 0,
@@ -510,9 +526,11 @@
     STATE.motionPeaks.maxPitchStep = 0;
     STATE.motionPeaks.maxCompY = 0;
     STATE.motionPeaks.maxGroupY = 0;
+    STATE.motionPeaks.maxChainRestDev = 0;
     STATE.motionPeaks.last2sYJump = 0;
     STATE.motionPeaks.last2sPitchStep = 0;
     STATE.motionPeaks.last2sCompY = 0;
+    STATE.motionPeaks.last2sChainRestDev = 0;
     STATE.motionPeaks.samples = [];
     updateDebugStats();
   }
@@ -2293,11 +2311,18 @@
     setText('debugHookOrder', motion.hookOrder || '-');
     setText('debugTrackingMode', PARAMS.TRACKING_POSE_MODE || 'sourceRaw');
     setText('debugChainSim', motion.chainSim || 'none');
+    setText('debugChainTopY', formatDebugNumber(motion.chainTopScreenY, 3));
+    setText('debugChainFrontY', formatDebugNumber(motion.chainFrontScreenY, 3));
+    setText('debugChainTopIndex', Number.isFinite(motion.chainTopIndex) ? String(motion.chainTopIndex) : '-');
+    setText('debugChainMaxDev', formatDebugNumber(motion.chainMaxRestDev, 2));
+    setText('debugChainFrontDev', formatDebugNumber(motion.chainFrontRestDev, 2));
     setText('debugPeakYJump', formatDebugNumber(peaks.maxYJump, 2));
     setText('debugPeakPitchStep', formatDebugNumber(peaks.maxPitchStep, 3));
     setText('debugPeakCompY', formatDebugNumber(peaks.maxCompY, 2));
     setText('debugPeak2sYJump', formatDebugNumber(peaks.last2sYJump, 2));
     setText('debugPeak2sPitch', formatDebugNumber(peaks.last2sPitchStep, 3));
+    setText('debugPeakChainDev', formatDebugNumber(peaks.maxChainRestDev, 2));
+    setText('debugPeak2sChainDev', formatDebugNumber(peaks.last2sChainRestDev, 2));
     setText('debugPeakSamples', String(peaks.samples ? peaks.samples.length : 0));
   }
 
@@ -2349,11 +2374,13 @@
   function updateMotionPeaks(sample) {
     const peaks = STATE.motionPeaks;
     const now = sample.t;
+    const chainRestDev = Number.isFinite(sample.chainRestDev) ? sample.chainRestDev : 0;
 
     peaks.maxYJump = Math.max(peaks.maxYJump, sample.yJump);
     peaks.maxPitchStep = Math.max(peaks.maxPitchStep, sample.pitchStep);
     peaks.maxCompY = Math.max(peaks.maxCompY, Math.abs(sample.compY));
     peaks.maxGroupY = Math.max(peaks.maxGroupY, Math.abs(sample.groupY));
+    peaks.maxChainRestDev = Math.max(peaks.maxChainRestDev, chainRestDev);
 
     peaks.samples.push(sample);
     const cutoff = now - PARAMS.PEAK_WINDOW_SEC;
@@ -2364,11 +2391,106 @@
     peaks.last2sYJump = 0;
     peaks.last2sPitchStep = 0;
     peaks.last2sCompY = 0;
+    peaks.last2sChainRestDev = 0;
     peaks.samples.forEach(function (item) {
       peaks.last2sYJump = Math.max(peaks.last2sYJump, item.yJump);
       peaks.last2sPitchStep = Math.max(peaks.last2sPitchStep, item.pitchStep);
       peaks.last2sCompY = Math.max(peaks.last2sCompY, Math.abs(item.compY));
+      peaks.last2sChainRestDev = Math.max(
+        peaks.last2sChainRestDev,
+        Number.isFinite(item.chainRestDev) ? item.chainRestDev : 0
+      );
     });
+  }
+
+  function emptyChainAuditMetrics() {
+    return {
+      chainPointCount: null,
+      chainTopScreenY: null,
+      chainTopScreenX: null,
+      chainTopIndex: null,
+      chainFrontScreenY: null,
+      chainFrontScreenX: null,
+      chainMaxRestDev: null,
+      chainAvgRestDev: null,
+      chainFrontRestDev: null,
+      chainMaxWorldY: null,
+      chainFrontWorldY: null,
+    };
+  }
+
+  function computeChainAuditMetrics() {
+    const metrics = emptyChainAuditMetrics();
+    const points = REFS.chainPoints || REFS.softCur;
+    if (!points || !points.length || !REFS.necklaceGroup) return metrics;
+
+    const rest = REFS.softRest;
+    const camera = REFS.camera;
+    const hasCamera = Boolean(camera && typeof REFS.auditProjectedPoint.project === 'function');
+    let maxRestDev = 0;
+    let sumRestDev = 0;
+    let restDevCount = 0;
+    let topScreenY = Infinity;
+    let maxWorldY = -Infinity;
+
+    REFS.necklaceGroup.updateWorldMatrix(true, false);
+    if (hasCamera) camera.updateMatrixWorld(true);
+
+    metrics.chainPointCount = points.length;
+
+    for (let i = 0; i < points.length; i++) {
+      const point = points[i];
+      if (!point) continue;
+
+      const worldPoint = REFS.auditWorldPoint.copy(point).applyMatrix4(REFS.necklaceGroup.matrixWorld);
+      if (worldPoint.y > maxWorldY) {
+        maxWorldY = worldPoint.y;
+        metrics.chainMaxWorldY = worldPoint.y;
+      }
+      if (i === 0) metrics.chainFrontWorldY = worldPoint.y;
+
+      if (rest && rest[i]) {
+        const restDev = point.distanceTo(rest[i]);
+        maxRestDev = Math.max(maxRestDev, restDev);
+        sumRestDev += restDev;
+        restDevCount++;
+        if (i === 0) metrics.chainFrontRestDev = restDev;
+      }
+
+      if (!hasCamera) continue;
+
+      const projected = REFS.auditProjectedPoint.copy(worldPoint).project(camera);
+      if (
+        !Number.isFinite(projected.x) ||
+        !Number.isFinite(projected.y) ||
+        !Number.isFinite(projected.z) ||
+        projected.z < -1 ||
+        projected.z > 1
+      ) {
+        continue;
+      }
+
+      const screenX = (projected.x + 1) * 0.5;
+      const screenY = (1 - projected.y) * 0.5;
+      if (i === 0) {
+        metrics.chainFrontScreenX = screenX;
+        metrics.chainFrontScreenY = screenY;
+        metrics.chainFrontWorldY = worldPoint.y;
+      }
+      if (screenY < topScreenY) {
+        topScreenY = screenY;
+        metrics.chainTopScreenX = screenX;
+        metrics.chainTopScreenY = screenY;
+        metrics.chainTopIndex = i;
+      }
+    }
+
+    metrics.chainMaxRestDev = restDevCount ? maxRestDev : null;
+    metrics.chainAvgRestDev = restDevCount ? sumRestDev / restDevCount : null;
+    if (!Number.isFinite(metrics.chainTopScreenY)) metrics.chainTopScreenY = null;
+    if (!Number.isFinite(metrics.chainMaxWorldY)) metrics.chainMaxWorldY = null;
+
+    return metrics;
   }
 
   function updateChainYawFade(state) {
@@ -2425,7 +2547,7 @@
     resetSoftChainVelocity();
     relaxSoftChainToRest(0.25);
     resetPendantPendulum();
-    setMotionDebug({
+    setMotionDebug(Object.assign({
       detected: false,
       followerY: REFS.follower ? REFS.follower.position.y : null,
       followerRotX: REFS.follower ? REFS.follower.rotation.x : null,
@@ -2439,7 +2561,7 @@
       dt: null,
       hookOrder: hookOrder || 'lost',
       chainSim: REFS.softCur ? 'lost/reset' : 'none',
-    });
+    }, computeChainAuditMetrics()));
   }
 
   function resetYawYStabilizer(yaw, liveY) {
@@ -2561,7 +2683,7 @@
       resetSoftChainVelocity();
       resetYawYStabilizer(yaw, liveY);
       resetPendantPendulum(yaw, pitch, roll);
-      setMotionDebug({
+      setMotionDebug(Object.assign({
         detected: true,
         followerY: followerY,
         followerRotX: followerRotX,
@@ -2577,7 +2699,7 @@
         dt: 0,
         hookOrder: (hookOrder || 'motion') + '/init',
         chainSim: REFS.softCur ? 'primed' : 'none',
-      });
+      }, computeChainAuditMetrics()));
       return;
     }
 
@@ -2623,6 +2745,7 @@
     }
     const chainSimStatus = simulateChain(dt, stalledFrame);
     updatePendantPendulum(dt, pitch, roll, yaw, stalledFrame);
+    const chainAudit = computeChainAuditMetrics();
     STATE.posePrevPitch = pitch;
     updateMotionPeaks({
       t: now,
@@ -2630,8 +2753,9 @@
       pitchStep: pitchStep,
       compY: appliedPose.y,
       groupY: REFS.necklaceGroup.position.y,
+      chainRestDev: chainAudit.chainMaxRestDev,
     });
-    setMotionDebug({
+    setMotionDebug(Object.assign({
       detected: true,
       followerY: followerY,
       followerRotX: followerRotX,
@@ -2647,7 +2771,7 @@
       dt: dt,
       hookOrder: hookOrder || 'motion',
       chainSim: chainSimStatus,
-    });
+    }, chainAudit));
   }
 
   function setDebugDrawerOpen(isOpen) {
@@ -2722,13 +2846,14 @@
 
     REFS.scene = sceneObjects && sceneObjects.threeScene;
     REFS.renderer = sceneObjects && sceneObjects.threeRenderer;
+    REFS.camera = sceneObjects && sceneObjects.threeCamera;
     REFS.follower = sceneObjects && sceneObjects.threeFaceFollowers && sceneObjects.threeFaceFollowers[0];
 
-    if (!REFS.scene || !REFS.renderer || !REFS.follower) {
+    if (!REFS.scene || !REFS.renderer || !REFS.camera || !REFS.follower) {
       STATE.trackingStarted = false;
       STATE.trackingReady = false;
       STATE.debugReady = false;
-      STATE.trackingError = 'WebAR ready callback did not provide a neck follower.';
+      STATE.trackingError = 'WebAR ready callback did not provide the required Three.js scene objects.';
       setStartButtonState('Retry tracking', false);
       updateStatus(false);
       console.error('[recreate-shell] incomplete scene objects:', sceneObjects);

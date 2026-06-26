@@ -74,6 +74,16 @@
     // Strong raw pose spikes should damp existing Verlet velocity instead of letting it accumulate.
     SOFT_SPIKE_Y_THRESHOLD: 8,
     SOFT_SPIKE_VELOCITY_DAMPING: 0.7,
+    MOTION_GUARD_ENABLED: true,
+    // Phase 2 guard: mark invalid nod/shoulder spikes and temporarily pull the soft chain back to rest.
+    MOTION_GUARD_Y_JUMP: 30,
+    MOTION_GUARD_PITCH_STEP: 0.28,
+    MOTION_GUARD_CHAIN_DEV_FRAC: 0.88,
+    MOTION_GUARD_RECOVERY_SEC: 0.85,
+    MOTION_GUARD_VELOCITY_DAMPING: 0.9,
+    MOTION_GUARD_REST_BLEND_MULT: 4.0,
+    MOTION_GUARD_REST_BLEND_MIN: 0.06,
+    MOTION_GUARD_FREEDOM_SCALE: 0.42,
     CHAIN_GAP: 1.0,
     // Geometry-only chain shaping. These keep the front point centered while making side arcs less inward.
     CHAIN_WIDTH_SCALE: 1.05,
@@ -345,6 +355,13 @@
     poseOffsetY: 0,
     posePitchComp: 0,
     poseLastT: 0,
+    motionGuard: {
+      mode: 'stable',
+      reason: '-',
+      recoveryUntil: 0,
+      recoveryRemaining: 0,
+      lastTriggerT: 0,
+    },
     rendererReady: false,
     envMapReady: false,
     envMapError: null,
@@ -383,6 +400,9 @@
       dt: null,
       hookOrder: '-',
       chainSim: 'none',
+      motionGuardMode: 'stable',
+      motionGuardRecovery: 0,
+      unsafeReason: '-',
       chainPointCount: null,
       chainTopScreenY: null,
       chainTopScreenX: null,
@@ -1660,6 +1680,118 @@
     }
   }
 
+  function motionGuardSnapshot(now) {
+    const guard = STATE.motionGuard;
+    const t = Number.isFinite(now) ? now : performance.now() / 1000;
+    const remaining = Math.max(0, guard.recoveryUntil - t);
+    guard.recoveryRemaining = remaining;
+    if (!PARAMS.MOTION_GUARD_ENABLED || remaining <= 0) {
+      guard.mode = 'stable';
+      guard.reason = '-';
+      guard.recoveryRemaining = 0;
+      return {
+        mode: guard.mode,
+        reason: guard.reason,
+        recoveryRemaining: 0,
+      };
+    }
+
+    if (t - guard.lastTriggerT > 0.12 && guard.mode === 'spike') {
+      guard.mode = 'recovering';
+    }
+    return {
+      mode: guard.mode,
+      reason: guard.reason,
+      recoveryRemaining: remaining,
+    };
+  }
+
+  function resetMotionGuard() {
+    STATE.motionGuard.mode = 'stable';
+    STATE.motionGuard.reason = '-';
+    STATE.motionGuard.recoveryUntil = 0;
+    STATE.motionGuard.recoveryRemaining = 0;
+    STATE.motionGuard.lastTriggerT = 0;
+  }
+
+  function triggerMotionGuard(reason, now) {
+    if (!PARAMS.MOTION_GUARD_ENABLED) return motionGuardSnapshot(now);
+
+    const guard = STATE.motionGuard;
+    const t = Number.isFinite(now) ? now : performance.now() / 1000;
+    guard.mode = 'spike';
+    guard.reason = reason || 'motion spike';
+    guard.lastTriggerT = t;
+    guard.recoveryUntil = Math.max(
+      guard.recoveryUntil || 0,
+      t + Math.max(0.1, PARAMS.MOTION_GUARD_RECOVERY_SEC)
+    );
+    guard.recoveryRemaining = Math.max(0, guard.recoveryUntil - t);
+    dampSoftChainVelocity(PARAMS.MOTION_GUARD_VELOCITY_DAMPING);
+    return motionGuardSnapshot(t);
+  }
+
+  function updateMotionGuardFromPose(upwardJump, pitchStep, now, stalledFrame) {
+    if (!PARAMS.MOTION_GUARD_ENABLED || stalledFrame) return motionGuardSnapshot(now);
+
+    const reasons = [];
+    if (upwardJump >= PARAMS.MOTION_GUARD_Y_JUMP) {
+      reasons.push('pose Y spike');
+    }
+    if (pitchStep >= PARAMS.MOTION_GUARD_PITCH_STEP) {
+      reasons.push('pitch spike');
+    }
+
+    if (reasons.length) {
+      return triggerMotionGuard(reasons.join(' + '), now);
+    }
+    return motionGuardSnapshot(now);
+  }
+
+  function updateMotionGuardFromChain(chainSimStatus, chainAudit, now) {
+    if (!PARAMS.MOTION_GUARD_ENABLED) return motionGuardSnapshot(now);
+
+    const maxDev = chainAudit && chainAudit.chainMaxRestDev;
+    const devThreshold = Math.max(0, PARAMS.SOFT_MAX_DEV * PARAMS.MOTION_GUARD_CHAIN_DEV_FRAC);
+    const isMoving = chainSimStatus === 'moving';
+    if (isMoving && Number.isFinite(maxDev) && maxDev >= devThreshold) {
+      return triggerMotionGuard('chain near soft limit', now);
+    }
+    return motionGuardSnapshot(now);
+  }
+
+  function motionGuardRecoveryFactors() {
+    const snapshot = motionGuardSnapshot();
+    if (!PARAMS.MOTION_GUARD_ENABLED || snapshot.recoveryRemaining <= 0) {
+      return {
+        strength: 0,
+        restBlend: PARAMS.SOFT_REST_BLEND,
+        freedomScale: 1,
+      };
+    }
+
+    const duration = Math.max(0.1, PARAMS.MOTION_GUARD_RECOVERY_SEC);
+    const strength = smoothstep01(snapshot.recoveryRemaining / duration);
+    const restBlend = Math.max(
+      PARAMS.SOFT_REST_BLEND,
+      Math.max(
+        PARAMS.SOFT_REST_BLEND * PARAMS.MOTION_GUARD_REST_BLEND_MULT,
+        PARAMS.MOTION_GUARD_REST_BLEND_MIN
+      ) * strength
+    );
+    const freedomScale = THREE.MathUtils.lerp(
+      1,
+      THREE.MathUtils.clamp(PARAMS.MOTION_GUARD_FREEDOM_SCALE, 0, 1),
+      strength
+    );
+
+    return {
+      strength: strength,
+      restBlend: restBlend,
+      freedomScale: freedomScale,
+    };
+  }
+
   function relaxSoftChainToRest(amount) {
     if (!REFS.softCur || !REFS.softPrev || !REFS.softRest) return;
     const alpha = THREE.MathUtils.clamp(amount, 0, 1);
@@ -1713,17 +1845,20 @@
     const damp = PARAMS.SOFT_DAMPING;
     const pin = PARAMS.SOFT_PIN_STRENGTH;
     const dev = PARAMS.SOFT_MAX_DEV;
-    const restBlend = PARAMS.SOFT_REST_BLEND;
+    const guardRecovery = motionGuardRecoveryFactors();
+    const restBlend = guardRecovery.restBlend;
+    const freedomScale = guardRecovery.freedomScale;
     const h2 = safeDt * safeDt;
     let maxMove = 0;
 
     for (let i = 0; i < n; i++) {
-      const f = free[i];
+      const baseF = free[i];
+      const f = baseF * freedomScale;
       const ci = cur[i];
       const pi = prev[i];
       const ri = rest[i];
 
-      if (f <= 0.02) {
+      if (baseF <= 0.02) {
         ci.copy(ri);
         pi.copy(ri);
         continue;
@@ -1760,7 +1895,7 @@
 
       if (restBlend > 0) {
         // Blend both Verlet buffers so the chain rebalances without injecting fresh velocity.
-        const rb = restBlend * (0.25 + f * 0.75);
+        const rb = restBlend * (0.25 + baseF * 0.75);
         ci.lerp(ri, rb);
         pi.lerp(ri, rb);
       }
@@ -2311,6 +2446,9 @@
     setText('debugHookOrder', motion.hookOrder || '-');
     setText('debugTrackingMode', PARAMS.TRACKING_POSE_MODE || 'sourceRaw');
     setText('debugChainSim', motion.chainSim || 'none');
+    setText('debugMotionGuard', motion.motionGuardMode || 'stable');
+    setText('debugRecoveryTime', formatDebugNumber(motion.motionGuardRecovery, 2));
+    setText('debugUnsafeReason', motion.unsafeReason || '-');
     setText('debugChainTopY', formatDebugNumber(motion.chainTopScreenY, 3));
     setText('debugChainFrontY', formatDebugNumber(motion.chainFrontScreenY, 3));
     setText('debugChainTopIndex', Number.isFinite(motion.chainTopIndex) ? String(motion.chainTopIndex) : '-');
@@ -2547,6 +2685,8 @@
     resetSoftChainVelocity();
     relaxSoftChainToRest(0.25);
     resetPendantPendulum();
+    resetMotionGuard();
+    const guardDebug = motionGuardSnapshot();
     setMotionDebug(Object.assign({
       detected: false,
       followerY: REFS.follower ? REFS.follower.position.y : null,
@@ -2561,6 +2701,9 @@
       dt: null,
       hookOrder: hookOrder || 'lost',
       chainSim: REFS.softCur ? 'lost/reset' : 'none',
+      motionGuardMode: guardDebug.mode,
+      motionGuardRecovery: guardDebug.recoveryRemaining,
+      unsafeReason: guardDebug.reason,
     }, computeChainAuditMetrics()));
   }
 
@@ -2683,6 +2826,8 @@
       resetSoftChainVelocity();
       resetYawYStabilizer(yaw, liveY);
       resetPendantPendulum(yaw, pitch, roll);
+      resetMotionGuard();
+      const guardDebug = motionGuardSnapshot(now);
       setMotionDebug(Object.assign({
         detected: true,
         followerY: followerY,
@@ -2699,6 +2844,9 @@
         dt: 0,
         hookOrder: (hookOrder || 'motion') + '/init',
         chainSim: REFS.softCur ? 'primed' : 'none',
+        motionGuardMode: guardDebug.mode,
+        motionGuardRecovery: guardDebug.recoveryRemaining,
+        unsafeReason: guardDebug.reason,
       }, computeChainAuditMetrics()));
       return;
     }
@@ -2743,9 +2891,11 @@
     if (upwardJump > PARAMS.SOFT_SPIKE_Y_THRESHOLD) {
       dampSoftChainVelocity(PARAMS.SOFT_SPIKE_VELOCITY_DAMPING);
     }
+    updateMotionGuardFromPose(upwardJump, pitchStep, now, stalledFrame);
     const chainSimStatus = simulateChain(dt, stalledFrame);
     updatePendantPendulum(dt, pitch, roll, yaw, stalledFrame);
     const chainAudit = computeChainAuditMetrics();
+    const guardDebug = updateMotionGuardFromChain(chainSimStatus, chainAudit, now);
     STATE.posePrevPitch = pitch;
     updateMotionPeaks({
       t: now,
@@ -2771,6 +2921,9 @@
       dt: dt,
       hookOrder: hookOrder || 'motion',
       chainSim: chainSimStatus,
+      motionGuardMode: guardDebug.mode,
+      motionGuardRecovery: guardDebug.recoveryRemaining,
+      unsafeReason: guardDebug.reason,
     }, chainAudit));
   }
 

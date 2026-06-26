@@ -36,7 +36,7 @@ Implementation notes:
 
 - Add debug-only metrics before changing behavior.
 - Log or show follower world Y, pitch, yaw, yaw step, raw Y delta, applied group Y, soft-chain max deviation, highest visible chain point, and pendant/front point screen position.
-- Add a simple "last unsafe reason" field once Phase 4 begins.
+- Add a simple "last unsafe reason" field once Phase 3 begins.
 - Compare static rest points against simulated points to detect whether the chain itself drifted upward.
 - Preserve the existing `sourceRaw` mode while measuring.
 
@@ -55,47 +55,7 @@ What NOT to change:
 
 - Do not alter WebAR init, solvePnP points, follower setup, static placement, pendant placement, product loading, or GLB transform.
 
-### Phase 2: Curve Safety Tuning
-
-Purpose:
-Reduce the chance that a correct necklace pose becomes unsafe under moderate tracking error by making the chain shape more stable and less prone to side arcs curling toward the face.
-
-Files/functions likely affected:
-
-- [recreate-necklace.js](D:/Coding/Necklace_VTO/recreate-necklace.js)
-- `PARAMS`
-- `buildNeckModel()`
-- `buildStaticChain()`
-- `placePendantAtChainFront()`, for verification only
-
-Implementation notes:
-
-- Keep the pendant/front point stable. The lowest/front chain node is the attachment reference and should not move casually.
-- Prefer rest-path tuning over occlusion or shader fade for actual shape problems.
-- Make the front path read as a softer V instead of a round U.
-- Reduce side inward curl by tuning width/depth/rear arc parameters conservatively.
-- Use screenshots or live debug checks before and after each small change.
-
-Acceptance criteria:
-
-- Initial placement remains visually accepted.
-- Pendant still attaches cleanly to the front chain point.
-- Side arcs are less likely to appear inside the neck or lower face during mild yaw.
-- The chain still looks like a necklace, not a rigid collar.
-
-Risks:
-
-- Over-tuning the rest curve can break the currently good initial placement.
-- Moving the front node can detach the pendant visually.
-- Fixing shape with occlusion/fade may hide symptoms while keeping bad geometry.
-
-What NOT to change:
-
-- Do not change solvePnP landmarks or object points.
-- Do not move `pendantPivot` as a curve-shape fix.
-- Do not retune GLB transform.
-
-### Phase 3: Dynamic Drift/Rebalance
+### Phase 2: Dynamic Drift/Rebalance
 
 Purpose:
 Ensure runtime state returns to a safe baseline after motion, stalls, tracking loss, or pose spikes.
@@ -117,6 +77,7 @@ Implementation notes:
 - On tracking lost/regain, reset velocity and relax more aggressively for a short period.
 - Clamp accumulated upward drift from yaw/Y stabilization and soft-chain deformation.
 - Add a short cooldown after large pose spikes where soft-chain freedom is reduced or rest blend is temporarily stronger.
+- Treat high pitch/shoulder-raise cases as invalid pose candidates instead of trying to make every invalid pose render correctly.
 
 Acceptance criteria:
 
@@ -137,7 +98,7 @@ What NOT to change:
 - Do not introduce a second follower or pendant path.
 - Do not change base static placement as part of drift handling.
 
-### Phase 4: Face/Upper-Neck Safety Guard
+### Phase 3: Face/Upper-Neck Safety Guard
 
 Purpose:
 Add an explicit visual safety boundary so visible chain geometry cannot remain in the user's face or mouth region when tracking becomes inaccurate.
@@ -159,6 +120,8 @@ Implementation notes:
   - detect if any visible point rises above a conservative upper-neck boundary;
   - use the tracked neck landmarks when available to estimate a safe upper limit;
   - fall back to a fixed screen band if landmark quality is weak.
+- Prefer baseline-relative thresholds over only fixed thresholds. For example, compare current `Chain Top Y` to the stable initial `Chain Top Y`, then allow limited upward movement.
+- Treat pitch/shoulder edge cases as unsafe when the side/front-side chain rises too far even if tracking score remains high.
 - Keep the guard conservative. It should catch obvious mouth/lower-face intrusion, not micromanage every necklace pixel.
 - Track safety state with hysteresis:
   - `safe`
@@ -186,7 +149,7 @@ What NOT to change:
 - Do not add MediaPipe/FaceMesh in this phase.
 - Do not move pendant placement to satisfy the safety check.
 
-### Phase 5: Unsafe Behavior And Recovery
+### Phase 4: Unsafe Behavior And Recovery
 
 Purpose:
 Define what the app does after the guard detects unsafe necklace placement.
@@ -210,6 +173,11 @@ Implementation notes:
   3. Relax/reset soft-chain state toward rest.
   4. Show a small user guidance prompt such as "Face camera" or "Hold still".
   5. Recover only after safety has been good for a hysteresis window.
+- Start with tolerant timing to avoid annoying users:
+  - `unsafeCandidate` after roughly 150-250 ms of sustained violation;
+  - fade/prompt after roughly 300-500 ms;
+  - recover after roughly 600-900 ms of stable safe readings.
+- Ignore isolated one-frame to five-frame spikes.
 - Keep fade and recovery state shared across tube chain, linked chain, PNG pendant, and GLB pendant.
 - Avoid sudden popping by using opacity transitions.
 
@@ -231,6 +199,47 @@ What NOT to change:
 - Do not solve unsafe state by changing WebAR settings.
 - Do not permanently offset the whole necklace upward/downward as a recovery mechanism.
 - Do not create separate safety behavior for PNG and GLB unless absolutely needed.
+
+### Phase 5: Conservative Curve Safety Tuning
+
+Purpose:
+Reduce the chance that a correct necklace pose becomes unsafe under moderate tracking error by making the chain shape more stable and less prone to side arcs curling toward the face. This phase is intentionally after the guard/recovery work because the first edge case is an invalid-pose problem, not a static placement problem.
+
+Files/functions likely affected:
+
+- [recreate-necklace.js](D:/Coding/Necklace_VTO/recreate-necklace.js)
+- `PARAMS`
+- `buildNeckModel()`
+- `buildStaticChain()`
+- `placePendantAtChainFront()`, for verification only
+
+Implementation notes:
+
+- Keep the pendant/front point stable. The lowest/front chain node is the attachment reference and should not move casually.
+- Prefer rest-path tuning over occlusion or shader fade for actual shape problems.
+- Make the front path read as a softer V instead of a round U only if the audit shows the rest shape contributes to side/front-side intrusion.
+- Reduce side inward curl by tuning width/depth/rear arc parameters conservatively.
+- Use screenshots or live debug checks before and after each small change.
+- Do not lower or reshape the necklace just to make invalid nod/shoulder poses look valid.
+
+Acceptance criteria:
+
+- Initial placement remains visually accepted.
+- Pendant still attaches cleanly to the front chain point.
+- Side arcs are less likely to appear inside the neck or lower face during mild yaw.
+- The chain still looks like a necklace, not a rigid collar.
+
+Risks:
+
+- Over-tuning the rest curve can break the currently good initial placement.
+- Moving the front node can detach the pendant visually.
+- Fixing shape with occlusion/fade may hide symptoms while keeping bad geometry.
+
+What NOT to change:
+
+- Do not change solvePnP landmarks or object points.
+- Do not move `pendantPivot` as a curve-shape fix.
+- Do not retune GLB transform.
 
 ### Phase 6: Optional Future Face Tracking
 
@@ -268,20 +277,22 @@ What NOT to change:
 ## 4. Recommended Order
 
 1. Phase 1 first: add enough debug metrics to identify the failure mode.
-2. Phase 3 second: improve drift/rebalance because it directly addresses "starts correct, gets worse over time".
-3. Phase 4 third: add the explicit safety guard once measurements are available.
-4. Phase 5 fourth: add fade/hold/reset recovery behavior behind the guard.
-5. Phase 2 can run in parallel only for small visual tuning, but avoid broad curve changes before the drift source is known.
+2. Phase 2 second: improve drift/rebalance because it directly addresses "starts correct, gets worse over time" and the observed high pose/chain-deviation spikes.
+3. Phase 3 third: add the explicit safety guard once measurements are available.
+4. Phase 4 fourth: add fade/hold/reset recovery behavior behind the guard.
+5. Phase 5 last: do conservative curve tuning only after the guard proves which chain segment is responsible.
 6. Phase 6 is optional future work and should not be included in the initial demo scope.
 
 For the current 4-day demo scope, the safest practical target is:
 
 - Phase 1 debug metrics.
-- Phase 3 drift/rebalance tightening.
-- Phase 4 simple screen-space safety guard.
-- Phase 5 conservative fade-and-recover behavior.
+- Phase 2 drift/rebalance tightening.
+- Phase 3 simple screen-space safety guard.
+- Phase 4 conservative fade-and-recover behavior.
 
-Keep Phase 2 limited to minor curve tuning only if the audit proves the rest shape contributes to the issue. Skip Phase 6.
+Keep Phase 5 limited to minor curve tuning only if the audit proves the rest shape contributes to the issue. Skip Phase 6.
+
+For the current head-down / shoulder-raise edge case, do not try to solve the whole problem by lowering or reshaping the necklace. The debug data indicates the app needs to recognize an invalid tracking/pose state, fade out, prompt the user to re-position, and recover with hysteresis so brief spikes do not annoy users.
 
 ## 5. Do Not Touch Yet
 
@@ -295,4 +306,3 @@ Keep Phase 2 limited to minor curve tuning only if the audit proves the rest sha
 - product loading and catalog normalization.
 - PNG fallback behavior.
 - GLB base transform and GLB calibration values.
-

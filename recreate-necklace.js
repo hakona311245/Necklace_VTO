@@ -56,6 +56,15 @@
     YAW_Y_SMOOTHING: 0.22,
     YAW_Y_RELEASE: 0.12,
     DEBUG_MOTION_LOG: false,
+    DEBUG_LANDMARK_BIAS_LOG: true,
+    LANDMARK_BIAS_LOG_INTERVAL: 0.75,
+    NECK_CENTER_GATE_ENABLED: true,
+    NECK_CENTER_TRUST_NORM: 0.04,
+    NECK_CENTER_REJECT_NORM: 0.1,
+    NECK_CENTER_VISUAL_X_COMP_ENABLED: true,
+    NECK_CENTER_VISUAL_X_MAX_COMP: 4.0,
+    NECK_CENTER_VISUAL_X_SMOOTHING: 0.16,
+    NECK_CENTER_VISUAL_X_SIGN: 1,
     MOTION_LOG_INTERVAL: 0.35,
     PEAK_WINDOW_SEC: 2,
     SOFT_ENABLED: true,
@@ -86,25 +95,25 @@
     MOTION_GUARD_FREEDOM_SCALE: 0.42,
     CHAIN_GAP: 1.0,
     // Geometry-only chain shaping. These keep the front point centered while making side arcs less inward.
-    CHAIN_WIDTH_SCALE: 1.05,
+    CHAIN_WIDTH_SCALE: 1.03,
     CHAIN_DEPTH_SCALE: 0.94,
-    CHAIN_SIDE_INSET: 0.04,
+    CHAIN_SIDE_INSET: 0.025,
     CHAIN_CURVE_TENSION: 0.4,
     SIDE_ARC_SMOOTHNESS: 0.82,
     // Geometry-only V shaping: keep the exact front point fixed, but taper/lift nearby shoulders.
     CHAIN_V_FRONT_START: 0.15,
     CHAIN_V_TAPER: 0.14,
-    CHAIN_V_SHOULDER_LIFT: 5.0,
+    CHAIN_V_SHOULDER_LIFT: 3.0,
     CHAIN_V_POWER: 1.1,
     // Rear-only tuck: pulls the side/back arc closer to the neck without moving the accepted front point.
-    REAR_ARC_START_COS: 0.22,
-    REAR_WIDTH_SCALE: 0.72,
-    REAR_DEPTH_SCALE: 0.96,
+    REAR_ARC_START_COS: 0.3,
+    REAR_WIDTH_SCALE: 0.65,
+    REAR_DEPTH_SCALE: 0.88,
     CHAIN_THICK: 1.15,
     CHAIN_SEGMENTS: 320,
     CHAIN_RADIAL: 10,
     CHAIN_STYLE: 'links',
-    LINK_COUNT: 92,
+    LINK_COUNT: 90,
     LINK_RADIUS: 2.7,
     LINK_TUBE_RADIUS: 0.34,
     LINK_SCALE_X: 1.7,
@@ -112,16 +121,23 @@
     LINK_RADIAL_SEGMENTS: 8,
     LINK_TUBULAR_SEGMENTS: 18,
     LINK_ALTERNATE_ROTATION: 1.5708,
-    LINK_VISIBLE_FRONT_ONLY: false,
+    LINK_VISIBLE_FRONT_ONLY: true,
+    // In front-only mode, render an open U around the front neck with a slight side wrap.
+    // 0 is the pendant/front point. Keep this span conservative so the ends fade before the face/neck edge.
+    LINK_FRONT_ONLY_START_U: 0.725,
+    LINK_FRONT_ONLY_SPAN_U: 0.55,
+    LINK_FRONT_EDGE_FADE_ENABLED: true,
+    LINK_FRONT_EDGE_FADE_FRAC: 0.18,
+    LINK_FRONT_EDGE_MIN_ALPHA: 0.14,
     LINK_BACK_FADE_ENABLED: true,
-    LINK_BACK_FADE_START_COS: 0.2,
-    LINK_BACK_FADE_END_COS: -0.75,
-    LINK_BACK_MIN_ALPHA: 0.08,
+    LINK_BACK_FADE_START_COS: 0.32,
+    LINK_BACK_FADE_END_COS: -0.68,
+    LINK_BACK_MIN_ALPHA: 0.06,
     FRONT_DRAPE: 58,
     // Horizontal local offset for quick left/right visual calibration. Try small values like -3 or 3.
     CHAIN_X_OFFSET: 0,
     // Positive values lift the entire static chain loop in neck-local space.
-    CHAIN_Y_OFFSET: 3.5,
+    CHAIN_Y_OFFSET: 7.0,
     // Lower values reduce how far the front/bottom of the loop drops on the chest.
     FRONT_DROP_SCALE: 0.02,
     LOOP_SAMPLES: 170,
@@ -137,8 +153,8 @@
     OCCLUDER_Y_OFFSET: 0,
     FADE_ENABLED: true,
     // 0 = front depth, 1 = back/nape depth. The chain starts fading near the back.
-    FADE_START_FRAC: 0.62,
-    FADE_END_FRAC: 0.92,
+    FADE_START_FRAC: 0.54,
+    FADE_END_FRAC: 0.88,
     YAW_REST_ADAPT: 0.03,
     YAW_HIDE_SIGN: 1,
     // Pendant plane width in neck-local units. Height follows the PNG aspect ratio.
@@ -226,6 +242,19 @@
     'torsoNeckCenterDown',
     'torsoNeckBackDown',
   ];
+
+  const NN_LANDMARK_LABELS = [
+    'torsoNeckCenterUp',
+    'torsoNeckCenterDown',
+    'torsoNeckLeftUp',
+    'torsoNeckRightUp',
+    'torsoNeckBackUp',
+    'torsoNeckBackDown',
+  ];
+  const NN_LANDMARK_INDEX = NN_LANDMARK_LABELS.reduce(function (acc, label, index) {
+    acc[label] = index;
+    return acc;
+  }, {});
 
   const NN_REGISTRY = {
     '9': {
@@ -362,6 +391,15 @@
       recoveryRemaining: 0,
       lastTriggerT: 0,
     },
+    neckCenter: {
+      ready: false,
+      confidence: 1,
+      blendToSide: 0,
+      centerOffsetPx: 0,
+      centerOffsetNorm: 0,
+      targetCompX: 0,
+      visualCompX: 0,
+    },
     rendererReady: false,
     envMapReady: false,
     envMapError: null,
@@ -394,6 +432,9 @@
       yawStep: null,
       rawYDelta: null,
       yawYCompensation: null,
+      neckCenterConfidence: 1,
+      neckCenterBlendToSide: 0,
+      neckCenterCompX: 0,
       groupY: null,
       compensationY: null,
       pitchCompensation: null,
@@ -428,6 +469,7 @@
       samples: [],
     },
     motionLogLastT: 0,
+    landmarkBiasLogLastT: 0,
     motionUpdatedBeforeTrack: false,
   };
 
@@ -1572,14 +1614,24 @@
     const count = REFS.linkMesh.count;
     const frontOnly = PARAMS.LINK_VISIBLE_FRONT_ONLY;
     const denom = Math.max(1, count - 1);
+    const frontStartU = Number.isFinite(PARAMS.LINK_FRONT_ONLY_START_U)
+      ? PARAMS.LINK_FRONT_ONLY_START_U
+      : 0.75;
+    const frontSpanU = Number.isFinite(PARAMS.LINK_FRONT_ONLY_SPAN_U)
+      ? PARAMS.LINK_FRONT_ONLY_SPAN_U
+      : 0.5;
     const fadeStart = PARAMS.LINK_BACK_FADE_START_COS;
     const fadeEnd = PARAMS.LINK_BACK_FADE_END_COS;
     const fadeSpan = Math.max(0.0001, fadeStart - fadeEnd);
     const minAlpha = THREE.MathUtils.clamp(PARAMS.LINK_BACK_MIN_ALPHA, 0, 1);
+    const edgeFadeEnabled = frontOnly && PARAMS.LINK_FRONT_EDGE_FADE_ENABLED;
+    const edgeFadeFrac = THREE.MathUtils.clamp(PARAMS.LINK_FRONT_EDGE_FADE_FRAC || 0, 0.001, 0.49);
+    const edgeMinAlpha = THREE.MathUtils.clamp(PARAMS.LINK_FRONT_EDGE_MIN_ALPHA, 0, 1);
     for (let i = 0; i < count; i++) {
       let u = i / count;
+      const spanProgress = i / denom;
       if (frontOnly) {
-        u = 0.75 + (i / denom) * 0.5;
+        u = frontStartU + spanProgress * frontSpanU;
         if (u >= 1) u -= 1;
       }
 
@@ -1588,7 +1640,11 @@
       const rearFade = PARAMS.LINK_BACK_FADE_ENABLED
         ? smoothstep01((fadeStart - cosT) / fadeSpan)
         : 0;
-      const linkAlpha = THREE.MathUtils.lerp(1, minAlpha, rearFade);
+      let linkAlpha = THREE.MathUtils.lerp(1, minAlpha, rearFade);
+      if (edgeFadeEnabled) {
+        const edgeT = Math.min(spanProgress, 1 - spanProgress) / edgeFadeFrac;
+        linkAlpha *= THREE.MathUtils.lerp(edgeMinAlpha, 1, smoothstep01(edgeT));
+      }
 
       REFS.chainCurve.getPointAt(u, REFS.linkPoint);
       REFS.chainCurve.getTangentAt(u, REFS.linkTangent).normalize();
@@ -2370,6 +2426,133 @@
     return [];
   }
 
+  function landmarkPoint(landmarks, label) {
+    const index = NN_LANDMARK_INDEX[label];
+    return Number.isInteger(index) ? landmarks[index] : null;
+  }
+
+  function landmarkScreenPoint(point, width, height) {
+    if (!point || point.length < 2) return null;
+    const xNorm = Number(point[0]);
+    const yNorm = Number(point[1]);
+    if (!Number.isFinite(xNorm) || !Number.isFinite(yNorm)) return null;
+    return {
+      x: (0.5 - xNorm * 0.5) * width,
+      y: (0.5 - yNorm * 0.5) * height,
+      xNorm: xNorm,
+      yNorm: yNorm,
+    };
+  }
+
+  function computeLandmarkBiasMetrics(landmarks) {
+    const layout = STATE.layout || {};
+    const width = layout.cssWidth || (STATE.sourceSize && STATE.sourceSize.width) || 1;
+    const height = layout.cssHeight || (STATE.sourceSize && STATE.sourceSize.height) || 1;
+    const centerUp = landmarkScreenPoint(landmarkPoint(landmarks, 'torsoNeckCenterUp'), width, height);
+    const centerDown = landmarkScreenPoint(landmarkPoint(landmarks, 'torsoNeckCenterDown'), width, height);
+    const leftUp = landmarkScreenPoint(landmarkPoint(landmarks, 'torsoNeckLeftUp'), width, height);
+    const rightUp = landmarkScreenPoint(landmarkPoint(landmarks, 'torsoNeckRightUp'), width, height);
+    if (!centerUp || !centerDown || !leftUp || !rightUp) return null;
+
+    const sideMidX = (leftUp.x + rightUp.x) * 0.5;
+    const centerMidX = (centerUp.x + centerDown.x) * 0.5;
+    const neckWidthPx = Math.abs(leftUp.x - rightUp.x);
+    const centerOffsetPx = centerMidX - sideMidX;
+    const centerOffsetNorm = neckWidthPx > 0 ? centerOffsetPx / neckWidthPx : 0;
+
+    return {
+      centerOffsetPx: centerOffsetPx,
+      centerOffsetNorm: centerOffsetNorm,
+      centerCorrectionPx: sideMidX - centerMidX,
+      centerUpOffsetPx: centerUp.x - sideMidX,
+      centerDownOffsetPx: centerDown.x - sideMidX,
+      centerSlopePx: centerDown.x - centerUp.x,
+      sideMidX: sideMidX,
+      centerMidX: centerMidX,
+      neckWidthPx: neckWidthPx,
+      centerUpX: centerUp.x,
+      centerDownX: centerDown.x,
+      leftUpX: leftUp.x,
+      rightUpX: rightUp.x,
+      screenWidth: width,
+      screenHeight: height,
+    };
+  }
+
+  function releaseNeckCenterGate() {
+    const gate = STATE.neckCenter;
+    gate.ready = false;
+    gate.confidence = 1;
+    gate.blendToSide = 0;
+    gate.centerOffsetPx = 0;
+    gate.centerOffsetNorm = 0;
+    gate.targetCompX = 0;
+    gate.visualCompX += (0 - gate.visualCompX) * 0.22;
+  }
+
+  function updateNeckCenterGate(landmarks) {
+    const gate = STATE.neckCenter;
+    if (!PARAMS.NECK_CENTER_GATE_ENABLED || !landmarks || landmarks.length < NN_LANDMARK_LABELS.length) {
+      releaseNeckCenterGate();
+      return gate;
+    }
+
+    const metrics = computeLandmarkBiasMetrics(landmarks);
+    if (!metrics || !Number.isFinite(metrics.centerOffsetNorm)) {
+      releaseNeckCenterGate();
+      return gate;
+    }
+
+    const trust = Math.max(0, PARAMS.NECK_CENTER_TRUST_NORM);
+    const reject = Math.max(trust + 0.001, PARAMS.NECK_CENTER_REJECT_NORM);
+    const absNorm = Math.abs(metrics.centerOffsetNorm);
+    const blendToSide = smoothstep01((absNorm - trust) / (reject - trust));
+    const confidence = 1 - blendToSide;
+    const maxComp = Math.max(0, PARAMS.NECK_CENTER_VISUAL_X_MAX_COMP);
+    const sign = Number.isFinite(PARAMS.NECK_CENTER_VISUAL_X_SIGN)
+      ? PARAMS.NECK_CENTER_VISUAL_X_SIGN
+      : 1;
+    const normalizedOffset = THREE.MathUtils.clamp(metrics.centerOffsetNorm / reject, -1, 1);
+    const targetCompX = PARAMS.NECK_CENTER_VISUAL_X_COMP_ENABLED
+      ? sign * normalizedOffset * blendToSide * maxComp
+      : 0;
+    const smoothing = THREE.MathUtils.clamp(PARAMS.NECK_CENTER_VISUAL_X_SMOOTHING, 0, 1);
+    const alpha = gate.ready ? smoothing : 1;
+
+    gate.ready = true;
+    gate.confidence = confidence;
+    gate.blendToSide = blendToSide;
+    gate.centerOffsetPx = metrics.centerOffsetPx;
+    gate.centerOffsetNorm = metrics.centerOffsetNorm;
+    gate.targetCompX = targetCompX;
+    gate.visualCompX += (targetCompX - gate.visualCompX) * alpha;
+    return gate;
+  }
+
+  function logLandmarkBias(landmarks, detection) {
+    if (!PARAMS.DEBUG_LANDMARK_BIAS_LOG || !landmarks || landmarks.length < NN_LANDMARK_LABELS.length) return;
+    const now = performance.now() / 1000;
+    if (now - STATE.landmarkBiasLogLastT < PARAMS.LANDMARK_BIAS_LOG_INTERVAL) return;
+    STATE.landmarkBiasLogLastT = now;
+
+    const metrics = computeLandmarkBiasMetrics(landmarks);
+    if (!metrics) return;
+    console.log('[neck-landmark-bias]', {
+      score: detection && typeof detection.detected === 'number' ? Number(detection.detected.toFixed(3)) : null,
+      centerOffsetPx: Number(metrics.centerOffsetPx.toFixed(1)),
+      centerOffsetNorm: Number(metrics.centerOffsetNorm.toFixed(3)),
+      centerUpOffsetPx: Number(metrics.centerUpOffsetPx.toFixed(1)),
+      centerDownOffsetPx: Number(metrics.centerDownOffsetPx.toFixed(1)),
+      centerSlopePx: Number(metrics.centerSlopePx.toFixed(1)),
+      neckWidthPx: Number(metrics.neckWidthPx.toFixed(1)),
+      centerConfidence: Number(STATE.neckCenter.confidence.toFixed(3)),
+      centerBlendToSide: Number(STATE.neckCenter.blendToSide.toFixed(3)),
+      visualCompX: Number(STATE.neckCenter.visualCompX.toFixed(2)),
+      direction: metrics.centerOffsetPx > 0 ? 'preview-right' : metrics.centerOffsetPx < 0 ? 'preview-left' : 'centered',
+      note: 'Compares predicted center neck line against midpoint of left/right neck landmarks. This is diagnostic only.',
+    });
+  }
+
   function drawDebugPreviewPlaceholder(ctx, width, height, text) {
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = '#050507';
@@ -2401,19 +2584,24 @@
     ctx.fillStyle = '#7bd88f';
     ctx.strokeStyle = 'rgba(5, 5, 7, 0.75)';
     ctx.lineWidth = 2;
+    ctx.font = '10px system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
 
-    landmarks.forEach(function (point) {
-      if (!point || point.length < 2) return;
-      const xNorm = Number(point[0]);
-      const yNorm = Number(point[1]);
-      if (!Number.isFinite(xNorm) || !Number.isFinite(yNorm)) return;
-
-      const x = (0.5 - xNorm * 0.5) * width;
-      const y = (0.5 - yNorm * 0.5) * height;
+    landmarks.forEach(function (point, index) {
+      const screenPoint = landmarkScreenPoint(point, width, height);
+      if (!screenPoint) return;
+      const x = screenPoint.x;
+      const y = screenPoint.y;
       ctx.beginPath();
       ctx.arc(x, y, 4, 0, Math.PI * 2);
       ctx.stroke();
       ctx.fill();
+      const label = NN_LANDMARK_LABELS[index];
+      if (label) {
+        ctx.strokeText(label.replace('torsoNeck', ''), x + 6, y);
+        ctx.fillText(label.replace('torsoNeck', ''), x + 6, y);
+      }
     });
 
     ctx.restore();
@@ -2557,6 +2745,26 @@
     };
   }
 
+  function isChainPointVisibleForAudit(u) {
+    if (PARAMS.CHAIN_STYLE !== 'links' || !PARAMS.LINK_VISIBLE_FRONT_ONLY) return true;
+
+    const start = Number.isFinite(PARAMS.LINK_FRONT_ONLY_START_U)
+      ? PARAMS.LINK_FRONT_ONLY_START_U
+      : 0.75;
+    const span = Number.isFinite(PARAMS.LINK_FRONT_ONLY_SPAN_U)
+      ? PARAMS.LINK_FRONT_ONLY_SPAN_U
+      : 0.5;
+    if (span >= 1) return true;
+
+    const normalizedU = ((u % 1) + 1) % 1;
+    const normalizedStart = ((start % 1) + 1) % 1;
+    const normalizedEnd = (((start + span) % 1) + 1) % 1;
+    if (normalizedStart <= normalizedEnd) {
+      return normalizedU >= normalizedStart && normalizedU <= normalizedEnd;
+    }
+    return normalizedU >= normalizedStart || normalizedU <= normalizedEnd;
+  }
+
   function computeChainAuditMetrics() {
     const metrics = emptyChainAuditMetrics();
     const points = REFS.chainPoints || REFS.softCur;
@@ -2595,7 +2803,7 @@
         if (i === 0) metrics.chainFrontRestDev = restDev;
       }
 
-      if (!hasCamera) continue;
+      if (!hasCamera || !isChainPointVisibleForAudit(i / points.length)) continue;
 
       const projected = REFS.auditProjectedPoint.copy(worldPoint).project(camera);
       if (
@@ -2680,6 +2888,8 @@
       STATE.poseOffsetY = 0;
       STATE.posePitchComp = 0;
     }
+    releaseNeckCenterGate();
+    REFS.necklaceGroup.position.x = STATE.neckCenter.visualCompX;
     REFS.necklaceGroup.position.y = STATE.poseOffsetY;
     REFS.necklaceGroup.rotation.x = STATE.posePitchComp;
     resetSoftChainVelocity();
@@ -2695,6 +2905,9 @@
       yawStep: null,
       rawYDelta: null,
       yawYCompensation: STATE.yawYOffset,
+      neckCenterConfidence: STATE.neckCenter.confidence,
+      neckCenterBlendToSide: STATE.neckCenter.blendToSide,
+      neckCenterCompX: STATE.neckCenter.visualCompX,
       groupY: REFS.necklaceGroup.position.y,
       compensationY: STATE.poseOffsetY,
       pitchCompensation: STATE.posePitchComp,
@@ -2760,11 +2973,14 @@
   }
 
   function applyTrackingPoseMode(upwardJump) {
-    const applied = { y: 0, pitch: 0 };
+    const applied = { x: 0, y: 0, pitch: 0 };
     if (!REFS.necklaceGroup) return applied;
 
     const mode = PARAMS.TRACKING_POSE_MODE || 'sourceRaw';
     const yawY = PARAMS.YAW_Y_STABILIZER_ENABLED ? STATE.yawYOffset : 0;
+    applied.x = PARAMS.NECK_CENTER_GATE_ENABLED && PARAMS.NECK_CENTER_VISUAL_X_COMP_ENABLED
+      ? STATE.neckCenter.visualCompX
+      : 0;
 
     if (mode === 'compensated') {
       applied.y = STATE.poseOffsetY;
@@ -2780,6 +2996,7 @@
     }
 
     applied.y += yawY;
+    REFS.necklaceGroup.position.x = applied.x;
     REFS.necklaceGroup.position.y = applied.y;
     REFS.necklaceGroup.rotation.x = applied.pitch;
     return applied;
@@ -2820,6 +3037,11 @@
       STATE.poseOffsetY = 0;
       STATE.posePitchComp = 0;
       STATE.poseLastT = now;
+      STATE.neckCenter.visualCompX = 0;
+      STATE.neckCenter.targetCompX = 0;
+      STATE.neckCenter.confidence = 1;
+      STATE.neckCenter.blendToSide = 0;
+      REFS.necklaceGroup.position.x = 0;
       REFS.necklaceGroup.position.y = 0;
       REFS.necklaceGroup.rotation.x = 0;
       resetMotionPeaks();
@@ -2838,6 +3060,9 @@
         yawStep: 0,
         rawYDelta: 0,
         yawYCompensation: STATE.yawYOffset,
+        neckCenterConfidence: STATE.neckCenter.confidence,
+        neckCenterBlendToSide: STATE.neckCenter.blendToSide,
+        neckCenterCompX: STATE.neckCenter.visualCompX,
         groupY: 0,
         compensationY: 0,
         pitchCompensation: 0,
@@ -2915,6 +3140,9 @@
       yawStep: yawMotion.yawStep,
       rawYDelta: yawMotion.rawYDelta,
       yawYCompensation: yawMotion.yawYCompensation,
+      neckCenterConfidence: STATE.neckCenter.confidence,
+      neckCenterBlendToSide: STATE.neckCenter.blendToSide,
+      neckCenterCompX: STATE.neckCenter.visualCompX,
       groupY: REFS.necklaceGroup.position.y,
       compensationY: appliedPose.y,
       pitchCompensation: appliedPose.pitch,
@@ -3036,9 +3264,11 @@
     console.log('[recreate-shell] WebAR ready. Follower:', REFS.follower);
   }
 
-  function onBeforeRenderPose(detectStates) {
+  function onBeforeRenderPose(detectStates, landmarksStabilized) {
     const state = Array.isArray(detectStates) ? detectStates[0] : detectStates;
+    const landmarks = normalizeLandmarks(landmarksStabilized);
     STATE.motionUpdatedBeforeTrack = true;
+    updateNeckCenterGate(landmarks);
     updateChainYawFade(state);
     updateNecklaceMotionStabilizer(state, 'pre-render');
   }
@@ -3052,6 +3282,10 @@
       landmarksCount: landmarks.length,
     };
     STATE.lastLandmarks = landmarks;
+    if (!STATE.motionUpdatedBeforeTrack) {
+      updateNeckCenterGate(landmarks);
+    }
+    logLandmarkBias(landmarks, STATE.lastDetection);
     if (!STATE.motionUpdatedBeforeTrack) {
       updateChainYawFade(state);
       updateNecklaceMotionStabilizer(state, 'post-render fallback');

@@ -95,16 +95,16 @@
     MOTION_GUARD_FREEDOM_SCALE: 0.42,
     CHAIN_GAP: 1.0,
     // Geometry-only chain shaping. These keep the front point centered while making side arcs less inward.
-    CHAIN_WIDTH_SCALE: 1.16,
+    CHAIN_WIDTH_SCALE: 1.11,
     CHAIN_DEPTH_SCALE: 1.02,
-    CHAIN_SIDE_INSET: 0.025,
+    CHAIN_SIDE_INSET: 0.015,
     CHAIN_CURVE_TENSION: 0.4,
     SIDE_ARC_SMOOTHNESS: 0.82,
     // Geometry-only V shaping: keep the exact front point fixed, but taper/lift nearby shoulders.
     CHAIN_V_FRONT_START: 0.15,
-    CHAIN_V_TAPER: 0.18,
-    CHAIN_V_SHOULDER_LIFT: 6.0,
-    CHAIN_V_POWER: 0.85,
+    CHAIN_V_TAPER: 0.22,
+    CHAIN_V_SHOULDER_LIFT: 5.6,
+    CHAIN_V_POWER: 0.9,
     // Rear-only tuck: pulls the side/back arc closer to the neck without moving the accepted front point.
     REAR_ARC_START_COS: 0.3,
     REAR_WIDTH_SCALE: 0.76,

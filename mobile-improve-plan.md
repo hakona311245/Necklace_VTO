@@ -100,6 +100,43 @@ Acceptance check:
 
 Report: Phase 2 implemented as a lightweight physics multiplier layer. Base desktop `PARAMS` constants remain unchanged. Desktop defaults to the `default` physics profile, while mobile/coarse-pointer runtimes auto-select `mobile` unless overridden. URL overrides are available with `?physics=default`, `?physics=mobile`, and `?physics=calm`. The profile layer only affects existing chain/pendant physics knobs: soft-chain motion deadzone, damping, rest blend, freedom scale, spike velocity damping, motion-guard velocity damping, pendant damping, and pendant yaw kick. Debug/export now records the active physics profile and effective physics values. `calm` was strengthened as a handheld-camera-shake test profile: higher deadzone/rest blend, lower soft-chain velocity carry/freedom, stronger spike/guard damping, higher pendant damping, and much lower yaw kick. `default` and `mobile` were left unchanged for A/B comparison. No pose-quality classification, safety guard, MediaPipe validation, placement calibration, solvePnP, follower setup, chain geometry, or pendant placement changes were made.
 
+## Phase 2b. Mobile Pose Jump Damping
+
+Goal:
+Reduce mobile necklace jumps caused by sudden derived pose movement when the phone moves closer/farther from the face, without changing solvePnP, follower setup, base placement, or chain geometry.
+
+What to implement:
+
+- Keep this as a small bridge between Phase 2 physics calming and Phase 4 pose-quality gating.
+- Detect obvious mobile pose jumps using existing measured signals only: `poseParentY`, `rawYDelta`, `neckWidthPx`, `centerOffsetNorm`, `backOffsetNorm`, yaw/pitch changes, tracking loss/regain, and large frame stalls.
+- When a jump is detected, damp or blend only the derived visual application for a short recovery window.
+- Reset or damp soft-chain and pendant velocity on jump/recovery so the chain does not whip upward after the pose settles.
+- Keep desktop behavior unchanged unless explicitly tested through a debug/URL override.
+
+Implementation hints:
+
+- Do not classify frames as good/suspect/bad yet; that belongs to Phase 4.
+- Do not add a full safety guard, MediaPipe validation, placement calibration, or new landmark source.
+- Prefer using existing motion debug fields and the Phase 2 physics profile plumbing.
+- Add diagnostics for whether pose-jump damping is active, which signal triggered it, and how long the recovery window remains.
+- Treat this as a temporary measured stabilizer: Phase 4 may replace or generalize it later.
+
+Relation to Phase 4:
+
+- Phase 2b handles one proven issue from the Phase 2 calm logs: large short-term pose jumps caused by handheld camera distance/framing changes.
+- Phase 4 is still the broader pose-quality gate. It should generalize Phase 2b into good/suspect/bad frame handling only after we confirm which Phase 2b signals actually predict bad necklace movement.
+- Do not duplicate Phase 2b thresholds blindly in Phase 4. Use Phase 2b logs to decide which signals become permanent quality inputs.
+
+Acceptance check:
+
+- Moving the phone slightly closer/farther from the face no longer causes a strong necklace jump upward or chain whip.
+- Normal slow yaw remains responsive.
+- Chain physics remains calm and does not hide a bad pose by stretching toward `SOFT_MAX_DEV`.
+- Debug JSON shows when damping triggered and whether it correlates with visible improvement.
+- No solvePnP, follower setup, camera pipeline, placement calibration, chain geometry, or pendant asset changes are introduced.
+
+Report: Phase 2b implemented as a mobile-only transient pose-jump damping layer. It does not change camera startup, solvePnP, follower setup, base placement, chain geometry, pendant assets, or desktop default behavior. The damping auto-enables on mobile/coarse-pointer runtimes and can be forced with `?poseJumpDamping=on` or disabled with `?poseJumpDamping=off`. It watches existing signals from the current frame: `poseParentY` delta, neck width delta, pitch/yaw step, `centerOffsetNorm`, `backOffsetNorm`, tracking stalls, and Phase 1b landmark metrics. When a short jump is detected, it applies a temporary local Y counter-offset to the necklace group, damps soft-chain Verlet velocity, damps pendant velocity, then fades out over a short recovery window. Debug/export now records `poseJumpMode`, `poseJumpReason`, `poseJumpRecovery`, `poseJumpOffsetY`, neck-width delta, landmark bias values, trigger count, and whether pose-jump damping is enabled. This remains a bridge to Phase 4: Phase 4 should use Phase 2b logs to decide which signals become permanent good/suspect/bad quality inputs instead of copying these thresholds blindly.
+
 ## Phase 3. Mobile Placement Calibration
 
 Goal:
@@ -129,7 +166,7 @@ Report: _Not started yet._
 ## Phase 4. Light Pose Quality Gate
 
 Goal:
-Stop obviously suspect mobile frames from driving the necklace and chain physics at full strength.
+Stop obviously suspect mobile frames from driving the necklace and chain physics at full strength, using Phase 2b results as measured input rather than starting from new assumptions.
 
 What to implement:
 
@@ -137,6 +174,7 @@ What to implement:
 - For good frames, accept normal updates.
 - For suspect frames, blend more slowly and use calmer chain physics.
 - For bad frames, briefly hold the last safe pose, reset or damp chain velocity, and fade only if the bad state persists.
+- Promote only the Phase 2b pose-jump signals that proved useful in logs; remove or relax signals that caused false positives.
 
 Implementation hints:
 

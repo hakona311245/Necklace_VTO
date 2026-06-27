@@ -151,6 +151,19 @@
     MOTION_GUARD_REST_BLEND_MULT: 4.0,
     MOTION_GUARD_REST_BLEND_MIN: 0.06,
     MOTION_GUARD_FREEDOM_SCALE: 0.42,
+    // Phase 2b mobile-only transient pose damping. This does not change solvePnP or follower pose.
+    POSE_JUMP_DAMPING_ENABLED: true,
+    POSE_JUMP_Y_DELTA: 4.0,
+    POSE_JUMP_NECK_WIDTH_DELTA: 8.0,
+    POSE_JUMP_PITCH_STEP: 0.085,
+    POSE_JUMP_YAW_STEP: 0.12,
+    POSE_JUMP_CENTER_OFFSET_NORM: 0.12,
+    POSE_JUMP_BACK_OFFSET_NORM: 0.14,
+    POSE_JUMP_RECOVERY_SEC: 0.55,
+    POSE_JUMP_OFFSET_STRENGTH: 0.55,
+    POSE_JUMP_MAX_OFFSET_Y: 8.0,
+    POSE_JUMP_SOFT_VELOCITY_DAMPING: 0.96,
+    POSE_JUMP_PENDANT_VELOCITY_DAMPING: 0.9,
     CHAIN_GAP: 1.0,
     // Geometry-only chain shaping. These keep the front point centered while making side arcs less inward.
     CHAIN_WIDTH_SCALE: 1.11,
@@ -452,6 +465,23 @@
       recoveryRemaining: 0,
       lastTriggerT: 0,
     },
+    poseJumpDamping: {
+      mode: 'stable',
+      reason: '-',
+      recoveryUntil: 0,
+      recoveryRemaining: 0,
+      lastTriggerT: 0,
+      offsetY: 0,
+      targetOffsetY: 0,
+      prevLiveY: null,
+      prevPitch: null,
+      prevYaw: null,
+      prevNeckWidthPx: null,
+      neckWidthDelta: 0,
+      centerOffsetNorm: null,
+      backOffsetNorm: null,
+      triggerCount: 0,
+    },
     neckCenter: {
       ready: false,
       confidence: 1,
@@ -504,6 +534,15 @@
       chainSim: 'none',
       motionGuardMode: 'stable',
       motionGuardRecovery: 0,
+      poseJumpMode: 'stable',
+      poseJumpReason: '-',
+      poseJumpRecovery: 0,
+      poseJumpOffsetY: 0,
+      poseJumpNeckWidthPx: null,
+      poseJumpNeckWidthDelta: 0,
+      poseJumpCenterOffsetNorm: null,
+      poseJumpBackOffsetNorm: null,
+      poseJumpTriggerCount: 0,
       unsafeReason: '-',
       chainPointCount: null,
       chainTopScreenY: null,
@@ -798,6 +837,25 @@
     return PARAMS.YAW_SHAKE_KICK * getPhysicsProfile().pendantYawKickMul;
   }
 
+  function getPoseJumpDampingOverride() {
+    try {
+      const params = new URLSearchParams(window.location.search || '');
+      const value = (params.get('poseJumpDamping') || '').toLowerCase();
+      if (value === 'on' || value === '1' || value === 'true') return true;
+      if (value === 'off' || value === '0' || value === 'false') return false;
+    } catch (e) {
+      // Keep automatic runtime selection.
+    }
+    return null;
+  }
+
+  function isPoseJumpDampingEnabled() {
+    if (!PARAMS.POSE_JUMP_DAMPING_ENABLED) return false;
+    const override = getPoseJumpDampingOverride();
+    if (override !== null) return override;
+    return isLikelyMobileRuntime();
+  }
+
   function getEffectivePhysicsDebug() {
     const profile = getPhysicsProfile();
     return {
@@ -812,6 +870,7 @@
       pendantDampingPng: effectivePendantDamping(PARAMS.PHYS_DAMPING),
       pendantDampingGlb: effectivePendantDamping(PARAMS.GLB_SWING_DAMPING),
       pendantYawKick: effectivePendantYawKick(),
+      poseJumpDampingEnabled: isPoseJumpDampingEnabled(),
     };
   }
 
@@ -837,6 +896,16 @@
       PHYSICS_PROFILE: getPhysicsProfileName(),
       MOTION_GUARD_ENABLED: PARAMS.MOTION_GUARD_ENABLED,
       MOTION_GUARD_RECOVERY_SEC: PARAMS.MOTION_GUARD_RECOVERY_SEC,
+      POSE_JUMP_DAMPING_ENABLED: PARAMS.POSE_JUMP_DAMPING_ENABLED,
+      POSE_JUMP_Y_DELTA: PARAMS.POSE_JUMP_Y_DELTA,
+      POSE_JUMP_NECK_WIDTH_DELTA: PARAMS.POSE_JUMP_NECK_WIDTH_DELTA,
+      POSE_JUMP_PITCH_STEP: PARAMS.POSE_JUMP_PITCH_STEP,
+      POSE_JUMP_YAW_STEP: PARAMS.POSE_JUMP_YAW_STEP,
+      POSE_JUMP_CENTER_OFFSET_NORM: PARAMS.POSE_JUMP_CENTER_OFFSET_NORM,
+      POSE_JUMP_BACK_OFFSET_NORM: PARAMS.POSE_JUMP_BACK_OFFSET_NORM,
+      POSE_JUMP_RECOVERY_SEC: PARAMS.POSE_JUMP_RECOVERY_SEC,
+      POSE_JUMP_OFFSET_STRENGTH: PARAMS.POSE_JUMP_OFFSET_STRENGTH,
+      POSE_JUMP_MAX_OFFSET_Y: PARAMS.POSE_JUMP_MAX_OFFSET_Y,
       PENDANT_MODE: PARAMS.PENDANT_MODE,
       PHYS_ENABLED: PARAMS.PHYS_ENABLED,
       PHYS_DAMPING: PARAMS.PHYS_DAMPING,
@@ -1222,6 +1291,7 @@
     STATE.motionPeaks.last2sCompY = 0;
     STATE.motionPeaks.last2sChainRestDev = 0;
     STATE.motionPeaks.samples = [];
+    resetPoseJumpDamping();
     resetDebugSamples();
     updateDebugStats();
   }
@@ -1242,6 +1312,14 @@
     if (REFS.glbPendantGroup) {
       applyGLBPendantTransform(REFS.glbPendantGroup);
     }
+  }
+
+  function dampPendantVelocity(amount) {
+    const phys = STATE.pendantPhys;
+    if (!phys) return;
+    const keep = 1 - THREE.MathUtils.clamp(amount, 0, 1);
+    phys.vx *= keep;
+    phys.vz *= keep;
   }
 
   function wrappedAngleDelta(next, prev) {
@@ -2430,6 +2508,155 @@
     return motionGuardSnapshot(now);
   }
 
+  function poseJumpDampingSnapshot(now) {
+    const damping = STATE.poseJumpDamping;
+    const t = Number.isFinite(now) ? now : performance.now() / 1000;
+    const remaining = Math.max(0, damping.recoveryUntil - t);
+    damping.recoveryRemaining = remaining;
+
+    if (!isPoseJumpDampingEnabled() || remaining <= 0) {
+      damping.mode = 'stable';
+      damping.reason = '-';
+      damping.recoveryRemaining = 0;
+      damping.targetOffsetY = 0;
+      damping.offsetY *= 0.82;
+      if (Math.abs(damping.offsetY) < 0.01) damping.offsetY = 0;
+      return {
+        mode: damping.mode,
+        reason: damping.reason,
+        recoveryRemaining: 0,
+        offsetY: damping.offsetY,
+      };
+    }
+
+    if (t - damping.lastTriggerT > 0.1 && damping.mode === 'jump') {
+      damping.mode = 'recovering';
+    }
+
+    const duration = Math.max(0.1, PARAMS.POSE_JUMP_RECOVERY_SEC);
+    const strength = smoothstep01(remaining / duration);
+    damping.offsetY += (damping.targetOffsetY - damping.offsetY) * 0.22;
+    damping.targetOffsetY *= 0.86;
+
+    return {
+      mode: damping.mode,
+      reason: damping.reason,
+      recoveryRemaining: remaining,
+      offsetY: damping.offsetY * strength,
+    };
+  }
+
+  function resetPoseJumpDamping(liveY, pitch, yaw, neckWidthPx) {
+    const damping = STATE.poseJumpDamping;
+    damping.mode = 'stable';
+    damping.reason = '-';
+    damping.recoveryUntil = 0;
+    damping.recoveryRemaining = 0;
+    damping.lastTriggerT = 0;
+    damping.offsetY = 0;
+    damping.targetOffsetY = 0;
+    damping.prevLiveY = Number.isFinite(liveY) ? liveY : null;
+    damping.prevPitch = Number.isFinite(pitch) ? pitch : null;
+    damping.prevYaw = Number.isFinite(yaw) ? yaw : null;
+    damping.prevNeckWidthPx = Number.isFinite(neckWidthPx) ? neckWidthPx : null;
+    damping.neckWidthDelta = 0;
+    damping.centerOffsetNorm = null;
+    damping.backOffsetNorm = null;
+    damping.triggerCount = 0;
+  }
+
+  function triggerPoseJumpDamping(reason, targetOffsetY, now) {
+    if (!isPoseJumpDampingEnabled()) return poseJumpDampingSnapshot(now);
+
+    const damping = STATE.poseJumpDamping;
+    const t = Number.isFinite(now) ? now : performance.now() / 1000;
+    damping.mode = 'jump';
+    damping.reason = reason || 'pose jump';
+    damping.lastTriggerT = t;
+    damping.triggerCount++;
+    damping.recoveryUntil = Math.max(
+      damping.recoveryUntil || 0,
+      t + Math.max(0.12, PARAMS.POSE_JUMP_RECOVERY_SEC)
+    );
+    damping.recoveryRemaining = Math.max(0, damping.recoveryUntil - t);
+    damping.targetOffsetY = THREE.MathUtils.clamp(
+      Number.isFinite(targetOffsetY) ? targetOffsetY : 0,
+      -PARAMS.POSE_JUMP_MAX_OFFSET_Y,
+      PARAMS.POSE_JUMP_MAX_OFFSET_Y
+    );
+    dampSoftChainVelocity(PARAMS.POSE_JUMP_SOFT_VELOCITY_DAMPING);
+    dampPendantVelocity(PARAMS.POSE_JUMP_PENDANT_VELOCITY_DAMPING);
+    return poseJumpDampingSnapshot(t);
+  }
+
+  function updatePoseJumpDamping(liveY, pitch, yaw, dt, stalledFrame, landmarkMetrics, signedSmoothYDelta, now) {
+    const damping = STATE.poseJumpDamping;
+    const metrics = landmarkMetrics || {};
+    const neckWidthPx = Number.isFinite(metrics.neckWidthPx) ? metrics.neckWidthPx : null;
+    const centerOffsetNorm = Number.isFinite(metrics.centerOffsetNorm) ? metrics.centerOffsetNorm : null;
+    const backOffsetNorm = Number.isFinite(metrics.backOffsetNorm) ? metrics.backOffsetNorm : null;
+
+    damping.centerOffsetNorm = centerOffsetNorm;
+    damping.backOffsetNorm = backOffsetNorm;
+
+    if (!isPoseJumpDampingEnabled()) {
+      resetPoseJumpDamping(liveY, pitch, yaw, neckWidthPx);
+      return poseJumpDampingSnapshot(now);
+    }
+
+    const hasPrevLiveY = Number.isFinite(damping.prevLiveY);
+    const hasPrevPitch = Number.isFinite(damping.prevPitch);
+    const hasPrevYaw = Number.isFinite(damping.prevYaw);
+    const hasPrevNeckWidth = Number.isFinite(damping.prevNeckWidthPx);
+
+    const yDelta = hasPrevLiveY && Number.isFinite(liveY) ? liveY - damping.prevLiveY : 0;
+    const pitchStep = hasPrevPitch && Number.isFinite(pitch) ? Math.abs(pitch - damping.prevPitch) : 0;
+    const yawStep = hasPrevYaw && Number.isFinite(yaw) ? Math.abs(angleDelta(yaw, damping.prevYaw)) : 0;
+    const neckWidthDelta = hasPrevNeckWidth && Number.isFinite(neckWidthPx)
+      ? neckWidthPx - damping.prevNeckWidthPx
+      : 0;
+    damping.neckWidthDelta = neckWidthDelta;
+
+    const reasons = [];
+    const absYDelta = Math.abs(yDelta);
+    const absSmoothYDelta = Number.isFinite(signedSmoothYDelta) ? Math.abs(signedSmoothYDelta) : 0;
+    const absNeckWidthDelta = Math.abs(neckWidthDelta);
+    if (stalledFrame) reasons.push('frame stall');
+    if (absYDelta >= PARAMS.POSE_JUMP_Y_DELTA) reasons.push('pose Y delta');
+    if (absSmoothYDelta >= PARAMS.POSE_JUMP_Y_DELTA * 1.5) reasons.push('pose Y smooth delta');
+    if (absNeckWidthDelta >= PARAMS.POSE_JUMP_NECK_WIDTH_DELTA) reasons.push('neck width delta');
+    if (pitchStep >= PARAMS.POSE_JUMP_PITCH_STEP) reasons.push('pitch step');
+    if (yawStep >= PARAMS.POSE_JUMP_YAW_STEP) reasons.push('yaw step');
+
+    const badCenter = Number.isFinite(centerOffsetNorm) &&
+      Math.abs(centerOffsetNorm) >= PARAMS.POSE_JUMP_CENTER_OFFSET_NORM;
+    const badBack = Number.isFinite(backOffsetNorm) &&
+      Math.abs(backOffsetNorm) >= PARAMS.POSE_JUMP_BACK_OFFSET_NORM;
+    if ((badCenter || badBack) && (
+      absYDelta >= PARAMS.POSE_JUMP_Y_DELTA * 0.5 ||
+      absSmoothYDelta >= PARAMS.POSE_JUMP_Y_DELTA ||
+      absNeckWidthDelta >= PARAMS.POSE_JUMP_NECK_WIDTH_DELTA * 0.5
+    )) {
+      reasons.push(badCenter && badBack ? 'center/back bias moving' : (badCenter ? 'center bias moving' : 'back bias moving'));
+    }
+
+    damping.prevLiveY = Number.isFinite(liveY) ? liveY : damping.prevLiveY;
+    damping.prevPitch = Number.isFinite(pitch) ? pitch : damping.prevPitch;
+    damping.prevYaw = Number.isFinite(yaw) ? yaw : damping.prevYaw;
+    damping.prevNeckWidthPx = Number.isFinite(neckWidthPx) ? neckWidthPx : damping.prevNeckWidthPx;
+
+    if (!reasons.length) return poseJumpDampingSnapshot(now);
+
+    const offsetSource = absYDelta >= PARAMS.POSE_JUMP_Y_DELTA * 0.5
+      ? yDelta
+      : signedSmoothYDelta * 0.65;
+    const signedOffset = -offsetSource * PARAMS.POSE_JUMP_OFFSET_STRENGTH;
+    const targetOffsetY = Number.isFinite(offsetSource) && Math.abs(offsetSource) >= PARAMS.POSE_JUMP_Y_DELTA * 0.5
+      ? signedOffset
+      : 0;
+    return triggerPoseJumpDamping(reasons.join(' + '), targetOffsetY, now);
+  }
+
   function updateMotionGuardFromChain(chainSimStatus, chainAudit, now) {
     if (!PARAMS.MOTION_GUARD_ENABLED) return motionGuardSnapshot(now);
 
@@ -3294,6 +3521,12 @@
     setText('debugPhysicsProfile', getPhysicsProfileLabel());
     setText('debugMotionGuard', motion.motionGuardMode || 'stable');
     setText('debugRecoveryTime', formatDebugNumber(motion.motionGuardRecovery, 2));
+    setText('debugPoseJump', motion.poseJumpMode || 'stable');
+    setText('debugPoseJumpReason', motion.poseJumpReason || '-');
+    setText('debugPoseJumpRecovery', formatDebugNumber(motion.poseJumpRecovery, 2));
+    setText('debugPoseJumpOffsetY', formatDebugNumber(motion.poseJumpOffsetY, 2));
+    setText('debugPoseJumpNeckDelta', formatDebugNumber(motion.poseJumpNeckWidthDelta, 2));
+    setText('debugPoseJumpTriggers', Number.isFinite(motion.poseJumpTriggerCount) ? String(motion.poseJumpTriggerCount) : '0');
     setText('debugUnsafeReason', motion.unsafeReason || '-');
     setText('debugChainTopY', formatDebugNumber(motion.chainTopScreenY, 3));
     setText('debugChainFrontY', formatDebugNumber(motion.chainFrontScreenY, 3));
@@ -3587,6 +3820,8 @@
     relaxSoftChainToRest(0.25);
     resetPendantPendulum();
     resetMotionGuard();
+    resetPoseJumpDamping();
+    const poseJumpDebug = poseJumpDampingSnapshot();
     const guardDebug = motionGuardSnapshot();
     setMotionDebug(Object.assign({
       detected: false,
@@ -3607,6 +3842,15 @@
       chainSim: REFS.softCur ? 'lost/reset' : 'none',
       motionGuardMode: guardDebug.mode,
       motionGuardRecovery: guardDebug.recoveryRemaining,
+      poseJumpMode: poseJumpDebug.mode,
+      poseJumpReason: poseJumpDebug.reason,
+      poseJumpRecovery: poseJumpDebug.recoveryRemaining,
+      poseJumpOffsetY: poseJumpDebug.offsetY,
+      poseJumpNeckWidthPx: null,
+      poseJumpNeckWidthDelta: 0,
+      poseJumpCenterOffsetNorm: null,
+      poseJumpBackOffsetNorm: null,
+      poseJumpTriggerCount: STATE.poseJumpDamping.triggerCount,
       unsafeReason: guardDebug.reason,
     }, computeChainAuditMetrics()));
   }
@@ -3663,12 +3907,13 @@
     return result;
   }
 
-  function applyTrackingPoseMode(upwardJump) {
+  function applyTrackingPoseMode(upwardJump, poseJumpSnapshot) {
     const applied = { x: 0, y: 0, pitch: 0 };
     if (!REFS.necklaceGroup) return applied;
 
     const mode = PARAMS.TRACKING_POSE_MODE || 'sourceRaw';
     const yawY = PARAMS.YAW_Y_STABILIZER_ENABLED ? STATE.yawYOffset : 0;
+    const poseJump = poseJumpSnapshot || poseJumpDampingSnapshot();
     applied.x = PARAMS.NECK_CENTER_GATE_ENABLED && PARAMS.NECK_CENTER_VISUAL_X_COMP_ENABLED
       ? STATE.neckCenter.visualCompX
       : 0;
@@ -3687,13 +3932,14 @@
     }
 
     applied.y += yawY;
+    applied.y += poseJump.offsetY;
     REFS.necklaceGroup.position.x = applied.x;
     REFS.necklaceGroup.position.y = applied.y;
     REFS.necklaceGroup.rotation.x = applied.pitch;
     return applied;
   }
 
-  function updateNecklaceMotionStabilizer(state, hookOrder) {
+  function updateNecklaceMotionStabilizer(state, hookOrder, landmarks) {
     if (!REFS.necklaceGroup || !REFS.follower || !state || !state.isDetected) {
       relaxNecklaceMotionCompensation(hookOrder);
       return;
@@ -3740,6 +3986,8 @@
       resetYawYStabilizer(yaw, liveY);
       resetPendantPendulum(yaw, pitch, roll);
       resetMotionGuard();
+      resetPoseJumpDamping(liveY, pitch, yaw, null);
+      const poseJumpDebug = poseJumpDampingSnapshot(now);
       const guardDebug = motionGuardSnapshot(now);
       setMotionDebug(Object.assign({
         detected: true,
@@ -3762,6 +4010,15 @@
         chainSim: REFS.softCur ? 'primed' : 'none',
         motionGuardMode: guardDebug.mode,
         motionGuardRecovery: guardDebug.recoveryRemaining,
+        poseJumpMode: poseJumpDebug.mode,
+        poseJumpReason: poseJumpDebug.reason,
+        poseJumpRecovery: poseJumpDebug.recoveryRemaining,
+        poseJumpOffsetY: poseJumpDebug.offsetY,
+        poseJumpNeckWidthPx: null,
+        poseJumpNeckWidthDelta: 0,
+        poseJumpCenterOffsetNorm: null,
+        poseJumpBackOffsetNorm: null,
+        poseJumpTriggerCount: STATE.poseJumpDamping.triggerCount,
         unsafeReason: guardDebug.reason,
       }, computeChainAuditMetrics()));
       return;
@@ -3778,7 +4035,8 @@
 
     const alpha = 1 - Math.pow(1 - PARAMS.POSE_SMOOTHING, dt * 60);
     const pitchAlpha = 1 - Math.pow(1 - PARAMS.PITCH_SMOOTHING, dt * 60);
-    const upwardJump = Math.max(0, liveY - STATE.poseSmoothY);
+    const signedSmoothYDelta = liveY - STATE.poseSmoothY;
+    const upwardJump = Math.max(0, signedSmoothYDelta);
     const pitchStep = Math.abs(pitch - STATE.posePrevPitch);
     STATE.poseSmoothY += (liveY - STATE.poseSmoothY) * alpha;
     STATE.poseSmoothPitch += (pitch - STATE.poseSmoothPitch) * pitchAlpha;
@@ -3803,7 +4061,18 @@
     STATE.posePitchComp += (pitchComp - STATE.posePitchComp) * Math.min(1, alpha * 1.1);
 
     const yawMotion = updateYawYStabilizer(yaw, liveY, dt, stalledFrame);
-    const appliedPose = applyTrackingPoseMode(upwardJump);
+    const landmarkMetrics = getLandmarkDiagnostics(landmarks);
+    const poseJumpDebug = updatePoseJumpDamping(
+      liveY,
+      pitch,
+      yaw,
+      dt,
+      stalledFrame,
+      landmarkMetrics,
+      signedSmoothYDelta,
+      now
+    );
+    const appliedPose = applyTrackingPoseMode(upwardJump, poseJumpDebug);
     if (upwardJump > PARAMS.SOFT_SPIKE_Y_THRESHOLD) {
       dampSoftChainVelocity(effectiveSoftSpikeVelocityDamping());
     }
@@ -3842,6 +4111,15 @@
       chainSim: chainSimStatus,
       motionGuardMode: guardDebug.mode,
       motionGuardRecovery: guardDebug.recoveryRemaining,
+      poseJumpMode: poseJumpDebug.mode,
+      poseJumpReason: poseJumpDebug.reason,
+      poseJumpRecovery: poseJumpDebug.recoveryRemaining,
+      poseJumpOffsetY: poseJumpDebug.offsetY,
+      poseJumpNeckWidthPx: STATE.poseJumpDamping.prevNeckWidthPx,
+      poseJumpNeckWidthDelta: STATE.poseJumpDamping.neckWidthDelta,
+      poseJumpCenterOffsetNorm: STATE.poseJumpDamping.centerOffsetNorm,
+      poseJumpBackOffsetNorm: STATE.poseJumpDamping.backOffsetNorm,
+      poseJumpTriggerCount: STATE.poseJumpDamping.triggerCount,
       unsafeReason: guardDebug.reason,
     }, chainAudit));
   }
@@ -3966,7 +4244,7 @@
     STATE.motionUpdatedBeforeTrack = true;
     updateNeckCenterGate(landmarks);
     updateChainYawFade(state);
-    updateNecklaceMotionStabilizer(state, 'pre-render');
+    updateNecklaceMotionStabilizer(state, 'pre-render', landmarks);
   }
 
   function onTrack(detectStates, landmarksStabilized) {
@@ -3986,7 +4264,7 @@
     logLandmarkBias(landmarks, STATE.lastDetection);
     if (!STATE.motionUpdatedBeforeTrack) {
       updateChainYawFade(state);
-      updateNecklaceMotionStabilizer(state, 'post-render fallback');
+      updateNecklaceMotionStabilizer(state, 'post-render fallback', landmarks);
     }
     recordDebugSample(now, landmarks);
     STATE.motionUpdatedBeforeTrack = false;

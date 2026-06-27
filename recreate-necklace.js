@@ -21,6 +21,9 @@
   const CATALOG_PATH = 'necklace-catalog.json';
   const DEFAULT_VIDEO_ASPECT = 16 / 9;
   const MAX_DEVICE_PIXEL_RATIO = 2;
+  const DEBUG_SAMPLE_WINDOW_SEC = 15;
+  const DEBUG_SAMPLE_INTERVAL_SEC = 0.2;
+  const DEBUG_UI_INTERVAL_SEC = 0.25;
   const AXIS_X = new THREE.Vector3(1, 0, 0);
   const PARAMS = {
     TAA_LEVEL: 3,
@@ -468,6 +471,36 @@
       last2sChainRestDev: 0,
       samples: [],
     },
+    diagnostics: {
+      samples: [],
+      lastSampleT: 0,
+      lastUiT: 0,
+      exportStatus: 'Ready',
+      trackFps: {
+        frames: 0,
+        lastT: 0,
+        value: null,
+      },
+      videoFps: {
+        supported: false,
+        running: false,
+        frames: 0,
+        lastT: 0,
+        value: null,
+        video: null,
+        handle: 0,
+      },
+      runtime: {
+        requestedVideoSettings: null,
+        cameraTrackSettings: null,
+        sourceVideo: null,
+        layout: null,
+        viewport: null,
+        trackFps: null,
+        videoFps: null,
+        videoFpsSupported: false,
+      },
+    },
     motionLogLastT: 0,
     landmarkBiasLogLastT: 0,
     motionUpdatedBeforeTrack: false,
@@ -571,6 +604,367 @@
 
   function formatDebugNumber(value, digits) {
     return Number.isFinite(value) ? value.toFixed(digits || 3) : '-';
+  }
+
+  function formatDebugSize(width, height) {
+    return Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
+      ? Math.round(width) + 'x' + Math.round(height)
+      : '-';
+  }
+
+  function formatDebugFps(value) {
+    return Number.isFinite(value) && value > 0 ? value.toFixed(1) + 'fps' : '-';
+  }
+
+  function cloneDebugValue(value) {
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function getMotionPeaksSummary() {
+    const peaks = STATE.motionPeaks || {};
+    return {
+      maxYJump: peaks.maxYJump,
+      maxPitchStep: peaks.maxPitchStep,
+      maxCompY: peaks.maxCompY,
+      maxGroupY: peaks.maxGroupY,
+      maxChainRestDev: peaks.maxChainRestDev,
+      last2sYJump: peaks.last2sYJump,
+      last2sPitchStep: peaks.last2sPitchStep,
+      last2sCompY: peaks.last2sCompY,
+      last2sChainRestDev: peaks.last2sChainRestDev,
+      sampleCount: peaks.samples ? peaks.samples.length : 0,
+    };
+  }
+
+  function getDebugRelevantParams() {
+    return {
+      TAA_LEVEL: PARAMS.TAA_LEVEL,
+      TRACKING_POSE_MODE: PARAMS.TRACKING_POSE_MODE,
+      ROT_PITCH: PARAMS.ROT_PITCH,
+      ROT_YAW: PARAMS.ROT_YAW,
+      ROT_ROLL: PARAMS.ROT_ROLL,
+      YAW_Y_STABILIZER_ENABLED: PARAMS.YAW_Y_STABILIZER_ENABLED,
+      YAW_Y_THRESHOLD: PARAMS.YAW_Y_THRESHOLD,
+      YAW_Y_STRENGTH: PARAMS.YAW_Y_STRENGTH,
+      YAW_Y_MAX_COMP: PARAMS.YAW_Y_MAX_COMP,
+      NECK_CENTER_GATE_ENABLED: PARAMS.NECK_CENTER_GATE_ENABLED,
+      NECK_CENTER_TRUST_NORM: PARAMS.NECK_CENTER_TRUST_NORM,
+      NECK_CENTER_REJECT_NORM: PARAMS.NECK_CENTER_REJECT_NORM,
+      SOFT_ENABLED: PARAMS.SOFT_ENABLED,
+      SOFT_DAMPING: PARAMS.SOFT_DAMPING,
+      SOFT_MOTION_DEADZONE: PARAMS.SOFT_MOTION_DEADZONE,
+      SOFT_REST_BLEND: PARAMS.SOFT_REST_BLEND,
+      SOFT_MAX_DEV: PARAMS.SOFT_MAX_DEV,
+      MOTION_GUARD_ENABLED: PARAMS.MOTION_GUARD_ENABLED,
+      MOTION_GUARD_RECOVERY_SEC: PARAMS.MOTION_GUARD_RECOVERY_SEC,
+      PENDANT_MODE: PARAMS.PENDANT_MODE,
+      PHYS_ENABLED: PARAMS.PHYS_ENABLED,
+      PHYS_DAMPING: PARAMS.PHYS_DAMPING,
+      YAW_SHAKE_KICK: PARAMS.YAW_SHAKE_KICK,
+    };
+  }
+
+  function getSourceVideoElement() {
+    if (REFS.helper && typeof REFS.helper.get_sourceVideoElement === 'function') {
+      try {
+        return REFS.helper.get_sourceVideoElement();
+      } catch (e) {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  function getViewportSnapshot() {
+    const screenInfo = window.screen || null;
+    const orientation = screenInfo && screenInfo.orientation
+      ? {
+          type: screenInfo.orientation.type || null,
+          angle: screenInfo.orientation.angle,
+        }
+      : {
+          type: null,
+          angle: Number.isFinite(window.orientation) ? window.orientation : null,
+        };
+    return {
+      innerWidth: window.innerWidth || null,
+      innerHeight: window.innerHeight || null,
+      devicePixelRatio: window.devicePixelRatio || 1,
+      screenWidth: screenInfo && screenInfo.width ? screenInfo.width : null,
+      screenHeight: screenInfo && screenInfo.height ? screenInfo.height : null,
+      orientation: orientation,
+    };
+  }
+
+  function getCameraTrackSettingsSnapshot(video) {
+    const sourceVideo = video || getSourceVideoElement();
+    const stream = sourceVideo && sourceVideo.srcObject;
+    if (!stream || typeof stream.getVideoTracks !== 'function') return null;
+
+    const track = stream.getVideoTracks()[0];
+    if (!track) return null;
+
+    const settings = typeof track.getSettings === 'function' ? track.getSettings() : {};
+    return {
+      width: settings.width,
+      height: settings.height,
+      frameRate: settings.frameRate,
+      facingMode: settings.facingMode,
+      aspectRatio: settings.aspectRatio,
+      resizeMode: settings.resizeMode,
+      readyState: track.readyState || null,
+      muted: Boolean(track.muted),
+      enabled: Boolean(track.enabled),
+    };
+  }
+
+  function getSourceVideoSnapshot(video) {
+    const sourceVideo = video || getSourceVideoElement();
+    let helperWidth = 0;
+    let helperHeight = 0;
+    if (REFS.helper && typeof REFS.helper.get_sourceWidth === 'function') {
+      try {
+        helperWidth = REFS.helper.get_sourceWidth();
+      } catch (e) {
+        helperWidth = 0;
+      }
+    }
+    if (REFS.helper && typeof REFS.helper.get_sourceHeight === 'function') {
+      try {
+        helperHeight = REFS.helper.get_sourceHeight();
+      } catch (e) {
+        helperHeight = 0;
+      }
+    }
+    const width = sourceVideo && sourceVideo.videoWidth ? sourceVideo.videoWidth : helperWidth;
+    const height = sourceVideo && sourceVideo.videoHeight ? sourceVideo.videoHeight : helperHeight;
+    return {
+      width: width || null,
+      height: height || null,
+      aspect: width && height ? width / height : null,
+      readyState: sourceVideo ? sourceVideo.readyState : null,
+      paused: sourceVideo ? Boolean(sourceVideo.paused) : null,
+      currentTime: sourceVideo && Number.isFinite(sourceVideo.currentTime) ? sourceVideo.currentTime : null,
+    };
+  }
+
+  function getLayoutSnapshot() {
+    return STATE.layout ? Object.assign({}, STATE.layout) : null;
+  }
+
+  function updateDebugRuntimeSnapshot() {
+    const video = getSourceVideoElement();
+    const diagnostics = STATE.diagnostics;
+    diagnostics.runtime = {
+      requestedVideoSettings: videoSettings(),
+      cameraTrackSettings: getCameraTrackSettingsSnapshot(video),
+      sourceVideo: getSourceVideoSnapshot(video),
+      layout: getLayoutSnapshot(),
+      viewport: getViewportSnapshot(),
+      trackFps: diagnostics.trackFps.value,
+      videoFps: diagnostics.videoFps.value,
+      videoFpsSupported: diagnostics.videoFps.supported,
+    };
+    return diagnostics.runtime;
+  }
+
+  function formatRequestedCamera(settings) {
+    if (!settings) return '-';
+    return (settings.facingMode || '-') + ' ' + formatDebugSize(settings.idealWidth, settings.idealHeight);
+  }
+
+  function formatActualCamera(settings) {
+    if (!settings) return '-';
+    const fps = Number.isFinite(settings.frameRate) ? ' ' + settings.frameRate.toFixed(1) + 'fps' : '';
+    const facing = settings.facingMode ? ' ' + settings.facingMode : '';
+    return formatDebugSize(settings.width, settings.height) + fps + facing;
+  }
+
+  function formatSourceVideo(snapshot) {
+    if (!snapshot) return '-';
+    const aspect = Number.isFinite(snapshot.aspect) ? ' a' + snapshot.aspect.toFixed(3) : '';
+    return formatDebugSize(snapshot.width, snapshot.height) + aspect;
+  }
+
+  function formatCanvasLayout(layout) {
+    if (!layout) return '-';
+    return (
+      'css ' + formatDebugSize(layout.cssWidth, layout.cssHeight) +
+      ' buf ' + formatDebugSize(layout.bufferWidth, layout.bufferHeight) +
+      ' dpr ' + formatDebugNumber(layout.dpr, 2)
+    );
+  }
+
+  function formatViewport(snapshot) {
+    if (!snapshot) return '-';
+    const orientation = snapshot.orientation && snapshot.orientation.type
+      ? ' ' + snapshot.orientation.type
+      : '';
+    return formatDebugSize(snapshot.innerWidth, snapshot.innerHeight) + orientation;
+  }
+
+  function getDebugBufferSeconds() {
+    const samples = STATE.diagnostics.samples;
+    if (samples.length < 2) return 0;
+    return samples[samples.length - 1].t - samples[0].t;
+  }
+
+  function updateDebugTrackFps(now) {
+    const fps = STATE.diagnostics.trackFps;
+    if (!fps.lastT) {
+      fps.lastT = now;
+      fps.frames = 0;
+      return;
+    }
+
+    fps.frames++;
+    const elapsed = now - fps.lastT;
+    if (elapsed >= 1) {
+      fps.value = fps.frames / elapsed;
+      fps.frames = 0;
+      fps.lastT = now;
+    }
+  }
+
+  function startDebugVideoFrameTiming() {
+    const video = getSourceVideoElement();
+    const fps = STATE.diagnostics.videoFps;
+    if (!video || typeof video.requestVideoFrameCallback !== 'function') {
+      fps.supported = false;
+      fps.running = false;
+      fps.value = null;
+      return;
+    }
+
+    fps.supported = true;
+    if (fps.running && fps.video === video) return;
+
+    fps.running = true;
+    fps.video = video;
+    fps.frames = 0;
+    fps.lastT = performance.now() / 1000;
+    fps.value = null;
+
+    const tick = function () {
+      if (!fps.running || fps.video !== video) return;
+      const now = performance.now() / 1000;
+      fps.frames++;
+      const elapsed = now - fps.lastT;
+      if (elapsed >= 1) {
+        fps.value = fps.frames / elapsed;
+        fps.frames = 0;
+        fps.lastT = now;
+      }
+      fps.handle = video.requestVideoFrameCallback(tick);
+    };
+
+    fps.handle = video.requestVideoFrameCallback(tick);
+  }
+
+  function buildDebugSnapshot() {
+    const runtime = updateDebugRuntimeSnapshot();
+    return {
+      meta: {
+        createdAt: new Date().toISOString(),
+        url: window.location.href,
+        userAgent: navigator.userAgent,
+        activeNN: ACTIVE_NN_KEY,
+      },
+      requestedVideoSettings: cloneDebugValue(runtime.requestedVideoSettings),
+      runtime: cloneDebugValue(runtime),
+      latest: {
+        trackingStarted: STATE.trackingStarted,
+        trackingReady: STATE.trackingReady,
+        trackingError: STATE.trackingError,
+        detection: cloneDebugValue(STATE.lastDetection),
+        motionDebug: cloneDebugValue(STATE.motionDebug),
+        motionPeaks: cloneDebugValue(getMotionPeaksSummary()),
+        product: {
+          name: STATE.product && STATE.product.name,
+          pendantMode: STATE.pendantMode,
+          metal: STATE.metal,
+        },
+      },
+      params: getDebugRelevantParams(),
+      samples: cloneDebugValue(STATE.diagnostics.samples) || [],
+    };
+  }
+
+  function recordDebugSample(now) {
+    const diagnostics = STATE.diagnostics;
+    if (diagnostics.lastSampleT && now - diagnostics.lastSampleT < DEBUG_SAMPLE_INTERVAL_SEC) return;
+    diagnostics.lastSampleT = now;
+
+    const runtime = updateDebugRuntimeSnapshot();
+    diagnostics.samples.push({
+      t: now,
+      iso: new Date().toISOString(),
+      trackingStarted: STATE.trackingStarted,
+      trackingReady: STATE.trackingReady,
+      detection: cloneDebugValue(STATE.lastDetection),
+      runtime: cloneDebugValue(runtime),
+      motionDebug: cloneDebugValue(STATE.motionDebug),
+      motionPeaks: cloneDebugValue(getMotionPeaksSummary()),
+      product: {
+        name: STATE.product && STATE.product.name,
+        pendantMode: STATE.pendantMode,
+        metal: STATE.metal,
+      },
+      activeNN: ACTIVE_NN_KEY,
+      params: getDebugRelevantParams(),
+    });
+
+    const cutoff = now - DEBUG_SAMPLE_WINDOW_SEC;
+    while (diagnostics.samples.length && diagnostics.samples[0].t < cutoff) {
+      diagnostics.samples.shift();
+    }
+  }
+
+  function setDebugExportStatus(message) {
+    STATE.diagnostics.exportStatus = message || 'Ready';
+    setText('debugExportStatus', STATE.diagnostics.exportStatus);
+  }
+
+  function downloadDebugSnapshot() {
+    const snapshot = buildDebugSnapshot();
+    const json = JSON.stringify(snapshot, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    link.href = url;
+    link.download = 'necklace-mobile-debug-' + stamp + '.json';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.setTimeout(function () {
+      URL.revokeObjectURL(url);
+    }, 1000);
+    setDebugExportStatus('Downloaded ' + snapshot.samples.length + ' samples');
+    return snapshot;
+  }
+
+  function copyDebugSnapshot() {
+    const snapshot = buildDebugSnapshot();
+    const json = JSON.stringify(snapshot, null, 2);
+    if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+      downloadDebugSnapshot();
+      setDebugExportStatus('Clipboard unavailable; downloaded');
+      return Promise.resolve(snapshot);
+    }
+
+    return navigator.clipboard.writeText(json).then(function () {
+      setDebugExportStatus('Copied ' + snapshot.samples.length + ' samples');
+      return snapshot;
+    }).catch(function () {
+      downloadDebugSnapshot();
+      setDebugExportStatus('Copy failed; downloaded');
+      return snapshot;
+    });
   }
 
   function smoothstep01(value) {
@@ -2611,6 +3005,9 @@
     const detection = STATE.lastDetection;
     const motion = STATE.motionDebug || {};
     const peaks = STATE.motionPeaks || {};
+    const runtime = updateDebugRuntimeSnapshot();
+    const samples = STATE.diagnostics.samples || [];
+    const bufferSeconds = getDebugBufferSeconds();
     const score = detection && typeof detection.detected === 'number'
       ? detection.detected.toFixed(3)
       : '-';
@@ -2650,9 +3047,29 @@
     setText('debugPeakChainDev', formatDebugNumber(peaks.maxChainRestDev, 2));
     setText('debugPeak2sChainDev', formatDebugNumber(peaks.last2sChainRestDev, 2));
     setText('debugPeakSamples', String(peaks.samples ? peaks.samples.length : 0));
+    setText('debugRequestedCamera', formatRequestedCamera(runtime.requestedVideoSettings));
+    setText('debugActualCamera', formatActualCamera(runtime.cameraTrackSettings));
+    setText('debugSourceVideo', formatSourceVideo(runtime.sourceVideo));
+    setText('debugCanvasLayout', formatCanvasLayout(runtime.layout));
+    setText('debugViewport', formatViewport(runtime.viewport));
+    setText(
+      'debugRuntimeFps',
+      'track ' + formatDebugFps(runtime.trackFps) + ' / video ' + formatDebugFps(runtime.videoFps)
+    );
+    setText('debugBuffer', samples.length + ' samples / ' + bufferSeconds.toFixed(1) + 's');
+    setText('debugExportStatus', STATE.diagnostics.exportStatus || 'Ready');
   }
 
-  function updateDebugPreview() {
+  function updateDebugPreview(force) {
+    const now = performance.now() / 1000;
+    if (
+      !force &&
+      STATE.diagnostics.lastUiT &&
+      now - STATE.diagnostics.lastUiT < DEBUG_UI_INTERVAL_SEC
+    ) {
+      return;
+    }
+    STATE.diagnostics.lastUiT = now;
     updateDebugStats();
     if (!STATE.debugDrawerOpen) return;
 
@@ -3164,7 +3581,7 @@
       toggle.setAttribute('aria-expanded', STATE.debugDrawerOpen ? 'true' : 'false');
       toggle.title = STATE.debugDrawerOpen ? 'Close debug preview' : 'Open debug preview';
     }
-    updateDebugPreview();
+    updateDebugPreview(true);
   }
 
   function setDebugAxesVisible(isVisible) {
@@ -3249,6 +3666,8 @@
       const layout = layoutCanvases(_videoAspect);
       REFS.helper.resize(layout.bufferWidth, layout.bufferHeight);
     }
+    startDebugVideoFrameTiming();
+    updateDebugRuntimeSnapshot();
 
     configureRenderer();
     ensureSceneLighting();
@@ -3261,6 +3680,7 @@
     STATE.trackingError = null;
     setStartButtonState('Tracking started', true);
     updateStatus(true);
+    updateDebugPreview(true);
     console.log('[recreate-shell] WebAR ready. Follower:', REFS.follower);
   }
 
@@ -3274,8 +3694,10 @@
   }
 
   function onTrack(detectStates, landmarksStabilized) {
+    const now = performance.now() / 1000;
     const state = Array.isArray(detectStates) ? detectStates[0] : detectStates;
     const landmarks = normalizeLandmarks(landmarksStabilized);
+    updateDebugTrackFps(now);
     STATE.lastDetection = {
       isDetected: Boolean(state && state.isDetected),
       detected: state && typeof state.detected === 'number' ? state.detected : null,
@@ -3290,6 +3712,7 @@
       updateChainYawFade(state);
       updateNecklaceMotionStabilizer(state, 'post-render fallback');
     }
+    recordDebugSample(now);
     STATE.motionUpdatedBeforeTrack = false;
     updateDebugPreview();
   }
@@ -3358,6 +3781,8 @@
     const debugClose = document.getElementById('debugClose');
     const axesToggle = document.getElementById('debugAxesToggle');
     const resetPeaks = document.getElementById('debugResetPeaks');
+    const copyDebugJson = document.getElementById('debugCopyJson');
+    const downloadDebugJson = document.getElementById('debugDownloadJson');
     const captureButton = document.getElementById('captureButton');
     const mobileMenuToggle = document.getElementById('mobileMenuToggle');
 
@@ -3391,6 +3816,16 @@
     }
     if (resetPeaks) {
       resetPeaks.addEventListener('click', resetMotionPeaks);
+    }
+    if (copyDebugJson) {
+      copyDebugJson.addEventListener('click', function () {
+        copyDebugSnapshot();
+      });
+    }
+    if (downloadDebugJson) {
+      downloadDebugJson.addEventListener('click', function () {
+        downloadDebugSnapshot();
+      });
     }
     if (mobileMenuToggle) {
       mobileMenuToggle.addEventListener('click', function () {
@@ -3435,6 +3870,9 @@
     setPendantMode: setPendantMode,
     setMetal: setMetal,
     captureComposite: captureComposite,
+    getDebugSnapshot: buildDebugSnapshot,
+    copyDebugSnapshot: copyDebugSnapshot,
+    downloadDebugSnapshot: downloadDebugSnapshot,
     renderCatalog: renderCatalog,
     updateInfo: updateInfo,
     highlightThumb: highlightThumb,

@@ -161,6 +161,25 @@
         line-height: 1;
       }
 
+      .debug-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin: 10px 0;
+      }
+
+      .debug-action {
+        appearance: none;
+        min-height: 34px;
+        cursor: pointer;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--text);
+        font: inherit;
+        font-size: 12px;
+      }
+
       .debug-preview-wrap {
         position: relative;
         overflow: hidden;
@@ -609,6 +628,42 @@
           <span class="debug-stat__label">Peak Samples</span>
           <span class="debug-stat__value" id="debugPeakSamples">0</span>
         </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Requested Camera</span>
+          <span class="debug-stat__value" id="debugRequestedCamera">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Actual Camera</span>
+          <span class="debug-stat__value" id="debugActualCamera">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Source Video</span>
+          <span class="debug-stat__value" id="debugSourceVideo">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Canvas Layout</span>
+          <span class="debug-stat__value" id="debugCanvasLayout">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Viewport</span>
+          <span class="debug-stat__value" id="debugViewport">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Runtime FPS</span>
+          <span class="debug-stat__value" id="debugRuntimeFps">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Debug Buffer</span>
+          <span class="debug-stat__value" id="debugBuffer">0 samples</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Export</span>
+          <span class="debug-stat__value" id="debugExportStatus">Ready</span>
+        </div>
+      </div>
+      <div class="debug-actions" aria-label="Debug export actions">
+        <button class="debug-action" id="debugCopyJson" type="button">Copy Debug JSON</button>
+        <button class="debug-action" id="debugDownloadJson" type="button">Download Debug JSON</button>
       </div>
       <button class="debug-close" id="debugResetPeaks" type="button" title="Reset motion peaks">Reset Peaks</button>
       <label class="debug-option">

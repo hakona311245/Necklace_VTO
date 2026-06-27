@@ -241,6 +241,18 @@
         height: 16px;
       }
 
+      .debug-select {
+        width: 100%;
+        min-height: 34px;
+        margin-top: 6px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--text);
+        font: inherit;
+        font-size: 12px;
+      }
+
       .vto-menu {
         position: fixed;
         z-index: 4;
@@ -565,6 +577,10 @@
           <span class="debug-stat__value" id="debugChainSim">None</span>
         </div>
         <div class="debug-stat">
+          <span class="debug-stat__label">Physics Profile</span>
+          <span class="debug-stat__value" id="debugPhysicsProfile">Default</span>
+        </div>
+        <div class="debug-stat">
           <span class="debug-stat__label">Motion Guard</span>
           <span class="debug-stat__value" id="debugMotionGuard">Stable</span>
         </div>
@@ -631,6 +647,14 @@
         <div class="debug-stat">
           <span class="debug-stat__label">Requested Camera</span>
           <span class="debug-stat__value" id="debugRequestedCamera">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Camera Profile</span>
+          <span class="debug-stat__value" id="debugCameraProfile">current</span>
+          <select class="debug-select" id="debugCameraProfileSelect" aria-label="Camera request profile">
+            <option value="current">Current</option>
+            <option value="standardIdeal">Standard ideal</option>
+          </select>
         </div>
         <div class="debug-stat">
           <span class="debug-stat__label">Actual Camera</span>

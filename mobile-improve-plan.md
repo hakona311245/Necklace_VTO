@@ -37,33 +37,68 @@ Acceptance check:
 - A debug JSON snapshot can be captured from the phone.
 - No visual behavior changes are introduced in this phase.
 
-Report: _Not started yet._
+Report: Phase 1 diagnostics implemented and mobile logs reviewed. Actual mobile camera/source is portrait 720x1280 at about 30fps, despite requesting 1280x720. Canvas layout adapts to the portrait source, so the canvas is not stuck at 1280x720, but the tracker is receiving less horizontal neck/shoulder context than intended. Detection score remains high even during bad behavior, so score alone cannot identify landmark geometry errors. Chain metrics show frequent "chain near soft limit" states, with chain max rest deviation often close to SOFT_MAX_DEV. The debug screen observation that BackUp and BackDown are offset preview-right is important because both landmarks are currently part of ACTIVE_IMGPOINTS and can bias solvePnP. Current exports do not include raw landmark coordinates, so Phase 1b is required before Phase 2 to measure landmark bias directly and test camera constraint behavior.
+
+## Phase 1b. Camera And Landmark Diagnostics
+
+Goal:
+Measure whether mobile shake/tilt is caused by portrait camera input, biased back landmarks, or chain physics amplification before changing tracking or physics behavior.
+
+What to implement:
+
+- Keep this diagnostics-only.
+- Clear the rolling debug sample buffer when `Reset Peaks` is tapped, so each exported JSON contains only the intended scenario.
+- Add raw normalized landmark coordinates to each debug sample for all six labels: `torsoNeckCenterUp`, `torsoNeckCenterDown`, `torsoNeckLeftUp`, `torsoNeckRightUp`, `torsoNeckBackUp`, and `torsoNeckBackDown`.
+- Add computed landmark metrics per sample: center-vs-side offset, `backUpOffsetPx`, `backDownOffsetPx`, `backMidOffsetPx`, `backOffsetNorm`, `backSlopePx`, and landmark screen positions for center, side, and back points.
+- Add a diagnostics-only camera request profile selector with `current` and `standardIdeal`.
+- Export the selected camera profile name and actual returned camera/source settings.
+
+Implementation hints:
+
+- Use existing `normalizeLandmarks()`, `NN_LANDMARK_LABELS`, `landmarkScreenPoint()`, and `computeLandmarkBiasMetrics()`.
+- Do not change `ACTIVE_IMGPOINTS`, solvePnP, follower setup, chain geometry, chain physics, pendant placement, or safety guard behavior.
+- Read the camera profile only before tracking starts. Do not switch camera constraints live after WebAR init.
+- Keep all new camera-profile behavior clearly diagnostic so it can be removed or promoted later.
+
+Acceptance check:
+
+- A forward-facing mobile export can prove whether `BackUp` and `BackDown` are consistently biased preview-right relative to the midpoint of `LeftUp` and `RightUp`.
+- A mobile export clearly shows whether `standardIdeal` changes actual camera output from portrait `720x1280` to any more useful stream.
+- `Reset Peaks` also clears the debug sample buffer.
+- `node --check recreate-necklace.js` passes.
+- No visual tracking or necklace behavior changes are introduced.
+
+Report: Phase 1b diagnostics implemented. Reset Peaks now clears the rolling debug sample buffer, exports include raw six-landmark coordinates and computed back-landmark bias metrics, and the debug drawer includes a diagnostics-only camera profile selector. Logs from `current` vs `standardIdeal` showed `standardIdeal` improved the actual mobile stream from portrait `720x1280` to `600x800`, reduced average `backOffsetNorm` from about `0.074` to `0.032`, and improved neck-center confidence from about `0.846` to `0.985`. Code now uses `standardIdeal` as the default camera profile. The old camera request remains available as fallback with `?cameraProfile=current`, or by setting `DEFAULT_CAMERA_PROFILE` back to `current` in `recreate-necklace.js`.
 
 ## Phase 2. Mobile Chain Physics Taming
 
 Goal:
-Reduce mobile shake caused by soft-chain and pendant physics amplifying small pose noise.
+Reduce mobile shake caused by soft-chain and pendant physics amplifying small pose noise, while keeping desktop behavior as the baseline.
 
 What to implement:
 
-- Add a lightweight mobile tuning path that reuses existing physics parameters and code paths.
-- Calm the soft chain on mobile by tuning existing concepts: motion deadzone, damping, rest blend, front pin freedom, spike velocity damping, and tracking-loss velocity resets.
-- Calm the pendant on mobile by reducing yaw kick and increasing damping only if diagnostics show pendant swing is contributing to visible shake.
+- Add a lightweight mobile/calm physics profile or multiplier layer only if needed; do not change base desktop physics constants directly.
+- Keep the default desktop profile available as the comparison baseline.
+- Add a debug/URL override such as `?physics=default`, `?physics=mobile`, or `?physics=calm` so behavior can be compared during QA.
+- Calm the soft chain on mobile using existing knobs only: motion deadzone, damping, rest blend, front freedom, spike velocity damping, and tracking-loss/regain velocity resets.
+- Calm the pendant only through existing knobs: yaw kick and damping.
 
 Implementation hints:
 
 - Work in `simulateChain()`, `resetSoftChainVelocity()`, `relaxSoftChainToRest()`, and `updatePendantPendulum()`.
-- Prefer deriving mobile-specific values from existing `PARAMS`; avoid adding new params unless the value needs to be visible/tunable.
-- Reset Verlet velocity on tracking loss, tracking regain, large stalls, and bad pose holds.
+- Prefer deriving mobile-specific values from existing `PARAMS`; avoid new params unless needed for the profile/override layer.
+- Reset Verlet velocity on tracking loss, tracking regain, large frame stalls, or any existing guard/hold state if already available.
 - Log which physics profile is active in the diagnostics overlay.
+- Do not implement pose quality classification, safety guard behavior, MediaPipe validation, or placement calibration in this phase.
 
 Acceptance check:
 
 - On mobile, chain shimmer is reduced while normal movement remains responsive.
 - The pendant remains attached and does not lag obviously behind the front chain point.
-- Desktop behavior remains visually unchanged or only minimally affected.
+- Desktop behavior remains unchanged under the default physics profile.
+- URL/debug overrides can compare default versus mobile/calm physics without code edits.
 
-Report: _Not started yet._
+Report: Phase 2 implemented as a lightweight physics multiplier layer. Base desktop `PARAMS` constants remain unchanged. Desktop defaults to the `default` physics profile, while mobile/coarse-pointer runtimes auto-select `mobile` unless overridden. URL overrides are available with `?physics=default`, `?physics=mobile`, and `?physics=calm`. The profile layer only affects existing chain/pendant physics knobs: soft-chain motion deadzone, damping, rest blend, freedom scale, spike velocity damping, motion-guard velocity damping, pendant damping, and pendant yaw kick. Debug/export now records the active physics profile and effective physics values. `calm` was strengthened as a handheld-camera-shake test profile: higher deadzone/rest blend, lower soft-chain velocity carry/freedom, stronger spike/guard damping, higher pendant damping, and much lower yaw kick. `default` and `mobile` were left unchanged for A/B comparison. No pose-quality classification, safety guard, MediaPipe validation, placement calibration, solvePnP, follower setup, chain geometry, or pendant placement changes were made.
 
 ## Phase 3. Mobile Placement Calibration
 

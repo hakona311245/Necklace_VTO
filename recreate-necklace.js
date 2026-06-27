@@ -21,10 +21,65 @@
   const CATALOG_PATH = 'necklace-catalog.json';
   const DEFAULT_VIDEO_ASPECT = 16 / 9;
   const MAX_DEVICE_PIXEL_RATIO = 2;
+  const DEFAULT_CAMERA_PROFILE = 'standardIdeal';
   const DEBUG_SAMPLE_WINDOW_SEC = 15;
   const DEBUG_SAMPLE_INTERVAL_SEC = 0.2;
   const DEBUG_UI_INTERVAL_SEC = 0.25;
   const AXIS_X = new THREE.Vector3(1, 0, 0);
+  const DEFAULT_PHYSICS_PROFILE = 'default';
+  const CAMERA_PROFILES = {
+    current: {
+      label: 'Current',
+      settings: {
+        facingMode: 'user',
+        idealWidth: 1280,
+        idealHeight: 720,
+      },
+    },
+    standardIdeal: {
+      label: 'Standard ideal',
+      settings: {
+        facingMode: 'user',
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      },
+    },
+  };
+  const PHYSICS_PROFILES = {
+    default: {
+      label: 'Default',
+      softMotionDeadzoneMul: 1,
+      softDampingMul: 1,
+      softRestBlendMul: 1,
+      softFreedomMul: 1,
+      softSpikeVelocityDamping: null,
+      motionGuardVelocityDamping: null,
+      pendantDampingMul: 1,
+      pendantYawKickMul: 1,
+    },
+    mobile: {
+      label: 'Mobile',
+      softMotionDeadzoneMul: 1.45,
+      softDampingMul: 0.88,
+      softRestBlendMul: 1.8,
+      softFreedomMul: 0.86,
+      softSpikeVelocityDamping: 0.86,
+      motionGuardVelocityDamping: 0.96,
+      pendantDampingMul: 1.35,
+      pendantYawKickMul: 0.5,
+    },
+    calm: {
+      label: 'Calm',
+      softMotionDeadzoneMul: 2.6,
+      softDampingMul: 0.62,
+      softRestBlendMul: 4.5,
+      softFreedomMul: 0.48,
+      softSpikeVelocityDamping: 0.98,
+      motionGuardVelocityDamping: 0.995,
+      pendantDampingMul: 2.4,
+      pendantYawKickMul: 0.1,
+    },
+  };
   const PARAMS = {
     TAA_LEVEL: 3,
     ENV_MAP_PATH: 'assets/envmaps/venice_sunset_512.hdr',
@@ -140,7 +195,7 @@
     // Horizontal local offset for quick left/right visual calibration. Try small values like -3 or 3.
     CHAIN_X_OFFSET: 0,
     // Positive values lift the entire static chain loop in neck-local space.
-    CHAIN_Y_OFFSET: 6.5,
+    CHAIN_Y_OFFSET: 5.5,
     // Lower values reduce how far the front/bottom of the loop drops on the chest.
     FRONT_DROP_SCALE: 0.25,
     LOOP_SAMPLES: 170,
@@ -361,6 +416,9 @@
     trackingStarted: false,
     trackingReady: false,
     trackingError: null,
+    cameraProfile: DEFAULT_CAMERA_PROFILE,
+    activeCameraProfile: null,
+    physicsProfile: DEFAULT_PHYSICS_PROFILE,
     sourceSize: null,
     lastDetection: null,
     debugReady: false,
@@ -640,6 +698,123 @@
     };
   }
 
+  function cloneCameraSettings(settings) {
+    return cloneDebugValue(settings) || {};
+  }
+
+  function getInitialCameraProfile() {
+    try {
+      const params = new URLSearchParams(window.location.search || '');
+      const profile = params.get('cameraProfile');
+      if (profile && CAMERA_PROFILES[profile]) return profile;
+    } catch (e) {
+      // Keep default camera diagnostics profile.
+    }
+    return DEFAULT_CAMERA_PROFILE;
+  }
+
+  function getCameraProfileName() {
+    return CAMERA_PROFILES[STATE.cameraProfile] ? STATE.cameraProfile : DEFAULT_CAMERA_PROFILE;
+  }
+
+  function getCameraProfileLabel(profileName) {
+    const profile = CAMERA_PROFILES[profileName] || CAMERA_PROFILES[DEFAULT_CAMERA_PROFILE];
+    return profile.label || profileName || DEFAULT_CAMERA_PROFILE;
+  }
+
+  function setCameraProfile(profileName) {
+    if (!CAMERA_PROFILES[profileName]) return;
+    STATE.cameraProfile = profileName;
+    const select = document.getElementById('debugCameraProfileSelect');
+    if (select && select.value !== profileName) select.value = profileName;
+    updateDebugStats();
+  }
+
+  function isLikelyMobileRuntime() {
+    const ua = navigator.userAgent || '';
+    return /Android|iPhone|iPad|iPod|Mobile/i.test(ua) ||
+      (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+  }
+
+  function getInitialPhysicsProfile() {
+    try {
+      const params = new URLSearchParams(window.location.search || '');
+      const profile = params.get('physics');
+      if (profile && PHYSICS_PROFILES[profile]) return profile;
+    } catch (e) {
+      // Keep automatic physics profile selection.
+    }
+    return isLikelyMobileRuntime() ? 'mobile' : DEFAULT_PHYSICS_PROFILE;
+  }
+
+  function getPhysicsProfileName() {
+    return PHYSICS_PROFILES[STATE.physicsProfile] ? STATE.physicsProfile : DEFAULT_PHYSICS_PROFILE;
+  }
+
+  function getPhysicsProfile() {
+    return PHYSICS_PROFILES[getPhysicsProfileName()] || PHYSICS_PROFILES.default;
+  }
+
+  function getPhysicsProfileLabel() {
+    const profile = getPhysicsProfile();
+    return profile.label || getPhysicsProfileName();
+  }
+
+  function effectiveSoftMotionDeadzone() {
+    return PARAMS.SOFT_MOTION_DEADZONE * getPhysicsProfile().softMotionDeadzoneMul;
+  }
+
+  function effectiveSoftDamping() {
+    return THREE.MathUtils.clamp(PARAMS.SOFT_DAMPING * getPhysicsProfile().softDampingMul, 0, 1);
+  }
+
+  function effectiveSoftRestBlend(baseRestBlend) {
+    return Math.max(0, baseRestBlend * getPhysicsProfile().softRestBlendMul);
+  }
+
+  function effectiveSoftFreedomScale(baseFreedomScale) {
+    return THREE.MathUtils.clamp(baseFreedomScale * getPhysicsProfile().softFreedomMul, 0, 1);
+  }
+
+  function effectiveSoftSpikeVelocityDamping() {
+    const profileValue = getPhysicsProfile().softSpikeVelocityDamping;
+    return Number.isFinite(profileValue)
+      ? THREE.MathUtils.clamp(profileValue, 0, 1)
+      : PARAMS.SOFT_SPIKE_VELOCITY_DAMPING;
+  }
+
+  function effectiveMotionGuardVelocityDamping() {
+    const profileValue = getPhysicsProfile().motionGuardVelocityDamping;
+    return Number.isFinite(profileValue)
+      ? THREE.MathUtils.clamp(profileValue, 0, 1)
+      : PARAMS.MOTION_GUARD_VELOCITY_DAMPING;
+  }
+
+  function effectivePendantDamping(baseDamping) {
+    return Math.max(0, baseDamping * getPhysicsProfile().pendantDampingMul);
+  }
+
+  function effectivePendantYawKick() {
+    return PARAMS.YAW_SHAKE_KICK * getPhysicsProfile().pendantYawKickMul;
+  }
+
+  function getEffectivePhysicsDebug() {
+    const profile = getPhysicsProfile();
+    return {
+      profile: getPhysicsProfileName(),
+      label: getPhysicsProfileLabel(),
+      softMotionDeadzone: effectiveSoftMotionDeadzone(),
+      softDamping: effectiveSoftDamping(),
+      softRestBlend: effectiveSoftRestBlend(PARAMS.SOFT_REST_BLEND),
+      softFreedomMul: profile.softFreedomMul,
+      softSpikeVelocityDamping: effectiveSoftSpikeVelocityDamping(),
+      motionGuardVelocityDamping: effectiveMotionGuardVelocityDamping(),
+      pendantDampingPng: effectivePendantDamping(PARAMS.PHYS_DAMPING),
+      pendantDampingGlb: effectivePendantDamping(PARAMS.GLB_SWING_DAMPING),
+      pendantYawKick: effectivePendantYawKick(),
+    };
+  }
+
   function getDebugRelevantParams() {
     return {
       TAA_LEVEL: PARAMS.TAA_LEVEL,
@@ -659,6 +834,7 @@
       SOFT_MOTION_DEADZONE: PARAMS.SOFT_MOTION_DEADZONE,
       SOFT_REST_BLEND: PARAMS.SOFT_REST_BLEND,
       SOFT_MAX_DEV: PARAMS.SOFT_MAX_DEV,
+      PHYSICS_PROFILE: getPhysicsProfileName(),
       MOTION_GUARD_ENABLED: PARAMS.MOTION_GUARD_ENABLED,
       MOTION_GUARD_RECOVERY_SEC: PARAMS.MOTION_GUARD_RECOVERY_SEC,
       PENDANT_MODE: PARAMS.PENDANT_MODE,
@@ -760,6 +936,12 @@
     const video = getSourceVideoElement();
     const diagnostics = STATE.diagnostics;
     diagnostics.runtime = {
+      cameraProfile: STATE.cameraProfile,
+      activeCameraProfile: STATE.activeCameraProfile,
+      cameraProfileLabel: getCameraProfileLabel(STATE.activeCameraProfile || STATE.cameraProfile),
+      physicsProfile: getPhysicsProfileName(),
+      physicsProfileLabel: getPhysicsProfileLabel(),
+      effectivePhysics: getEffectivePhysicsDebug(),
       requestedVideoSettings: videoSettings(),
       cameraTrackSettings: getCameraTrackSettingsSnapshot(video),
       sourceVideo: getSourceVideoSnapshot(video),
@@ -774,7 +956,17 @@
 
   function formatRequestedCamera(settings) {
     if (!settings) return '-';
-    return (settings.facingMode || '-') + ' ' + formatDebugSize(settings.idealWidth, settings.idealHeight);
+    const width = Number.isFinite(settings.idealWidth)
+      ? settings.idealWidth
+      : settings.width && Number.isFinite(settings.width.ideal)
+        ? settings.width.ideal
+        : null;
+    const height = Number.isFinite(settings.idealHeight)
+      ? settings.idealHeight
+      : settings.height && Number.isFinite(settings.height.ideal)
+        ? settings.height.ideal
+        : null;
+    return (settings.facingMode || '-') + ' ' + formatDebugSize(width, height);
   }
 
   function formatActualCamera(settings) {
@@ -811,6 +1003,12 @@
     const samples = STATE.diagnostics.samples;
     if (samples.length < 2) return 0;
     return samples[samples.length - 1].t - samples[0].t;
+  }
+
+  function resetDebugSamples() {
+    STATE.diagnostics.samples = [];
+    STATE.diagnostics.lastSampleT = 0;
+    setDebugExportStatus('Buffer reset');
   }
 
   function updateDebugTrackFps(now) {
@@ -865,6 +1063,29 @@
     fps.handle = video.requestVideoFrameCallback(tick);
   }
 
+  function getLandmarkSnapshot(landmarks) {
+    const source = landmarks || STATE.lastLandmarks || [];
+    const snapshot = {};
+    NN_LANDMARK_LABELS.forEach(function (label) {
+      const point = landmarkPoint(source, label);
+      snapshot[label] = point && point.length >= 2
+        ? {
+            xNorm: Number(point[0]),
+            yNorm: Number(point[1]),
+            raw: cloneDebugValue(point),
+          }
+        : null;
+    });
+    return snapshot;
+  }
+
+  function getLandmarkDiagnostics(landmarks) {
+    const source = landmarks || STATE.lastLandmarks;
+    if (!source || source.length < NN_LANDMARK_LABELS.length) return null;
+    const metrics = computeLandmarkBiasMetrics(source);
+    return metrics ? cloneDebugValue(metrics) : null;
+  }
+
   function buildDebugSnapshot() {
     const runtime = updateDebugRuntimeSnapshot();
     return {
@@ -875,12 +1096,23 @@
         activeNN: ACTIVE_NN_KEY,
       },
       requestedVideoSettings: cloneDebugValue(runtime.requestedVideoSettings),
+      cameraProfile: {
+        selected: STATE.cameraProfile,
+        active: STATE.activeCameraProfile,
+        label: getCameraProfileLabel(STATE.activeCameraProfile || STATE.cameraProfile),
+      },
+      physicsProfile: {
+        active: getPhysicsProfileName(),
+        label: getPhysicsProfileLabel(),
+      },
       runtime: cloneDebugValue(runtime),
       latest: {
         trackingStarted: STATE.trackingStarted,
         trackingReady: STATE.trackingReady,
         trackingError: STATE.trackingError,
         detection: cloneDebugValue(STATE.lastDetection),
+        landmarks: getLandmarkSnapshot(STATE.lastLandmarks),
+        landmarkMetrics: getLandmarkDiagnostics(STATE.lastLandmarks),
         motionDebug: cloneDebugValue(STATE.motionDebug),
         motionPeaks: cloneDebugValue(getMotionPeaksSummary()),
         product: {
@@ -894,7 +1126,7 @@
     };
   }
 
-  function recordDebugSample(now) {
+  function recordDebugSample(now, landmarks) {
     const diagnostics = STATE.diagnostics;
     if (diagnostics.lastSampleT && now - diagnostics.lastSampleT < DEBUG_SAMPLE_INTERVAL_SEC) return;
     diagnostics.lastSampleT = now;
@@ -907,6 +1139,8 @@
       trackingReady: STATE.trackingReady,
       detection: cloneDebugValue(STATE.lastDetection),
       runtime: cloneDebugValue(runtime),
+      landmarks: getLandmarkSnapshot(landmarks),
+      landmarkMetrics: getLandmarkDiagnostics(landmarks),
       motionDebug: cloneDebugValue(STATE.motionDebug),
       motionPeaks: cloneDebugValue(getMotionPeaksSummary()),
       product: {
@@ -988,6 +1222,7 @@
     STATE.motionPeaks.last2sCompY = 0;
     STATE.motionPeaks.last2sChainRestDev = 0;
     STATE.motionPeaks.samples = [];
+    resetDebugSamples();
     updateDebugStats();
   }
 
@@ -1127,11 +1362,8 @@
   }
 
   function videoSettings() {
-    return {
-      facingMode: 'user',
-      idealWidth: 1280,
-      idealHeight: 720,
-    };
+    const profileName = getCameraProfileName();
+    return cloneCameraSettings(CAMERA_PROFILES[profileName].settings);
   }
 
   function updateStatus(allChecksOk) {
@@ -2177,7 +2409,7 @@
       t + Math.max(0.1, PARAMS.MOTION_GUARD_RECOVERY_SEC)
     );
     guard.recoveryRemaining = Math.max(0, guard.recoveryUntil - t);
-    dampSoftChainVelocity(PARAMS.MOTION_GUARD_VELOCITY_DAMPING);
+    dampSoftChainVelocity(effectiveMotionGuardVelocityDamping());
     return motionGuardSnapshot(t);
   }
 
@@ -2215,7 +2447,7 @@
     if (!PARAMS.MOTION_GUARD_ENABLED || snapshot.recoveryRemaining <= 0) {
       return {
         strength: 0,
-        restBlend: PARAMS.SOFT_REST_BLEND,
+        restBlend: effectiveSoftRestBlend(PARAMS.SOFT_REST_BLEND),
         freedomScale: 1,
       };
     }
@@ -2223,9 +2455,9 @@
     const duration = Math.max(0.1, PARAMS.MOTION_GUARD_RECOVERY_SEC);
     const strength = smoothstep01(snapshot.recoveryRemaining / duration);
     const restBlend = Math.max(
-      PARAMS.SOFT_REST_BLEND,
+      effectiveSoftRestBlend(PARAMS.SOFT_REST_BLEND),
       Math.max(
-        PARAMS.SOFT_REST_BLEND * PARAMS.MOTION_GUARD_REST_BLEND_MULT,
+        effectiveSoftRestBlend(PARAMS.SOFT_REST_BLEND * PARAMS.MOTION_GUARD_REST_BLEND_MULT),
         PARAMS.MOTION_GUARD_REST_BLEND_MIN
       ) * strength
     );
@@ -2286,18 +2518,18 @@
 
     REFS.softMatT.multiplyMatrices(REFS.softMatInv, REFS.softMatPrev);
     const poseMove = REFS.softProbe.copy(rest[0]).applyMatrix4(REFS.softMatT).distanceTo(rest[0]);
-    const poseMoved = poseMove >= PARAMS.SOFT_MOTION_DEADZONE;
+    const poseMoved = poseMove >= effectiveSoftMotionDeadzone();
     const down = REFS.softDown.set(0, -1, 0).transformDirection(REFS.softMatInv);
 
     const g = PARAMS.SOFT_GRAVITY;
     const ks = PARAMS.SOFT_STIFFNESS;
     const kn = PARAMS.SOFT_NEIGHBOR;
-    const damp = PARAMS.SOFT_DAMPING;
+    const damp = effectiveSoftDamping();
     const pin = PARAMS.SOFT_PIN_STRENGTH;
     const dev = PARAMS.SOFT_MAX_DEV;
     const guardRecovery = motionGuardRecoveryFactors();
     const restBlend = guardRecovery.restBlend;
-    const freedomScale = guardRecovery.freedomScale;
+    const freedomScale = effectiveSoftFreedomScale(guardRecovery.freedomScale);
     const h2 = safeDt * safeDt;
     let maxMove = 0;
 
@@ -2379,9 +2611,11 @@
     const restZ = -PARAMS.GRAVITY_ROLL * roll * swingStrength;
     const stiffness = PARAMS.PHYS_STIFFNESS;
     const damping = isGLBMode ? PARAMS.GLB_SWING_DAMPING : PARAMS.PHYS_DAMPING;
+    const effectiveDamping = effectivePendantDamping(damping);
+    const yawKick = effectivePendantYawKick();
 
-    const ax = -stiffness * (phys.sx - restX) - damping * phys.vx;
-    const az = -stiffness * (phys.sz - restZ) - damping * phys.vz - PARAMS.YAW_SHAKE_KICK * yawSpeed * swingStrength;
+    const ax = -stiffness * (phys.sx - restX) - effectiveDamping * phys.vx;
+    const az = -stiffness * (phys.sz - restZ) - effectiveDamping * phys.vz - yawKick * yawSpeed * swingStrength;
     phys.vx += ax * safeDt;
     phys.sx += phys.vx * safeDt;
     phys.vz += az * safeDt;
@@ -2846,6 +3080,8 @@
     const centerDown = landmarkScreenPoint(landmarkPoint(landmarks, 'torsoNeckCenterDown'), width, height);
     const leftUp = landmarkScreenPoint(landmarkPoint(landmarks, 'torsoNeckLeftUp'), width, height);
     const rightUp = landmarkScreenPoint(landmarkPoint(landmarks, 'torsoNeckRightUp'), width, height);
+    const backUp = landmarkScreenPoint(landmarkPoint(landmarks, 'torsoNeckBackUp'), width, height);
+    const backDown = landmarkScreenPoint(landmarkPoint(landmarks, 'torsoNeckBackDown'), width, height);
     if (!centerUp || !centerDown || !leftUp || !rightUp) return null;
 
     const sideMidX = (leftUp.x + rightUp.x) * 0.5;
@@ -2853,6 +3089,15 @@
     const neckWidthPx = Math.abs(leftUp.x - rightUp.x);
     const centerOffsetPx = centerMidX - sideMidX;
     const centerOffsetNorm = neckWidthPx > 0 ? centerOffsetPx / neckWidthPx : 0;
+    const hasBack = Boolean(backUp && backDown);
+    const backMidX = hasBack ? (backUp.x + backDown.x) * 0.5 : null;
+    const backUpOffsetPx = backUp ? backUp.x - sideMidX : null;
+    const backDownOffsetPx = backDown ? backDown.x - sideMidX : null;
+    const backMidOffsetPx = Number.isFinite(backMidX) ? backMidX - sideMidX : null;
+    const backOffsetNorm = neckWidthPx > 0 && Number.isFinite(backMidOffsetPx)
+      ? backMidOffsetPx / neckWidthPx
+      : null;
+    const backSlopePx = hasBack ? backDown.x - backUp.x : null;
 
     return {
       centerOffsetPx: centerOffsetPx,
@@ -2868,8 +3113,23 @@
       centerDownX: centerDown.x,
       leftUpX: leftUp.x,
       rightUpX: rightUp.x,
+      backUpOffsetPx: backUpOffsetPx,
+      backDownOffsetPx: backDownOffsetPx,
+      backMidOffsetPx: backMidOffsetPx,
+      backOffsetNorm: backOffsetNorm,
+      backSlopePx: backSlopePx,
+      backUpX: backUp ? backUp.x : null,
+      backDownX: backDown ? backDown.x : null,
       screenWidth: width,
       screenHeight: height,
+      screenPoints: {
+        torsoNeckCenterUp: centerUp,
+        torsoNeckCenterDown: centerDown,
+        torsoNeckLeftUp: leftUp,
+        torsoNeckRightUp: rightUp,
+        torsoNeckBackUp: backUp,
+        torsoNeckBackDown: backDown,
+      },
     };
   }
 
@@ -3031,6 +3291,7 @@
     setText('debugHookOrder', motion.hookOrder || '-');
     setText('debugTrackingMode', PARAMS.TRACKING_POSE_MODE || 'sourceRaw');
     setText('debugChainSim', motion.chainSim || 'none');
+    setText('debugPhysicsProfile', getPhysicsProfileLabel());
     setText('debugMotionGuard', motion.motionGuardMode || 'stable');
     setText('debugRecoveryTime', formatDebugNumber(motion.motionGuardRecovery, 2));
     setText('debugUnsafeReason', motion.unsafeReason || '-');
@@ -3048,6 +3309,11 @@
     setText('debugPeak2sChainDev', formatDebugNumber(peaks.last2sChainRestDev, 2));
     setText('debugPeakSamples', String(peaks.samples ? peaks.samples.length : 0));
     setText('debugRequestedCamera', formatRequestedCamera(runtime.requestedVideoSettings));
+    setText(
+      'debugCameraProfile',
+      getCameraProfileLabel(STATE.activeCameraProfile || STATE.cameraProfile) +
+        (STATE.activeCameraProfile ? ' active' : ' selected')
+    );
     setText('debugActualCamera', formatActualCamera(runtime.cameraTrackSettings));
     setText('debugSourceVideo', formatSourceVideo(runtime.sourceVideo));
     setText('debugCanvasLayout', formatCanvasLayout(runtime.layout));
@@ -3058,6 +3324,14 @@
     );
     setText('debugBuffer', samples.length + ' samples / ' + bufferSeconds.toFixed(1) + 's');
     setText('debugExportStatus', STATE.diagnostics.exportStatus || 'Ready');
+    const cameraProfileSelect = document.getElementById('debugCameraProfileSelect');
+    if (cameraProfileSelect) {
+      cameraProfileSelect.value = STATE.cameraProfile;
+      cameraProfileSelect.disabled = STATE.trackingStarted || STATE.trackingReady;
+      cameraProfileSelect.title = cameraProfileSelect.disabled
+        ? 'Reload with ?cameraProfile=current to use the old camera request.'
+        : 'Select before tracking starts.';
+    }
   }
 
   function updateDebugPreview(force) {
@@ -3531,7 +3805,7 @@
     const yawMotion = updateYawYStabilizer(yaw, liveY, dt, stalledFrame);
     const appliedPose = applyTrackingPoseMode(upwardJump);
     if (upwardJump > PARAMS.SOFT_SPIKE_Y_THRESHOLD) {
-      dampSoftChainVelocity(PARAMS.SOFT_SPIKE_VELOCITY_DAMPING);
+      dampSoftChainVelocity(effectiveSoftSpikeVelocityDamping());
     }
     updateMotionGuardFromPose(upwardJump, pitchStep, now, stalledFrame);
     const chainSimStatus = simulateChain(dt, stalledFrame);
@@ -3635,6 +3909,7 @@
       STATE.trackingStarted = false;
       STATE.trackingReady = false;
       STATE.debugReady = false;
+      STATE.activeCameraProfile = null;
       STATE.trackingError = String(err);
       setStartButtonState('Retry tracking', false);
       updateStatus(false);
@@ -3651,6 +3926,7 @@
       STATE.trackingStarted = false;
       STATE.trackingReady = false;
       STATE.debugReady = false;
+      STATE.activeCameraProfile = null;
       STATE.trackingError = 'WebAR ready callback did not provide the required Three.js scene objects.';
       setStartButtonState('Retry tracking', false);
       updateStatus(false);
@@ -3712,7 +3988,7 @@
       updateChainYawFade(state);
       updateNecklaceMotionStabilizer(state, 'post-render fallback');
     }
-    recordDebugSample(now);
+    recordDebugSample(now, landmarks);
     STATE.motionUpdatedBeforeTrack = false;
     updateDebugPreview();
   }
@@ -3727,6 +4003,7 @@
     STATE.trackingStarted = true;
     STATE.trackingReady = false;
     STATE.trackingError = null;
+    STATE.activeCameraProfile = getCameraProfileName();
     setStartButtonState('Starting...', true);
     updateStatus(true);
 
@@ -3766,6 +4043,7 @@
       STATE.trackingStarted = false;
       STATE.trackingReady = false;
       STATE.debugReady = false;
+      STATE.activeCameraProfile = null;
       STATE.trackingError = String(e && e.message ? e.message : e);
       setStartButtonState('Retry tracking', false);
       updateStatus(false);
@@ -3783,6 +4061,7 @@
     const resetPeaks = document.getElementById('debugResetPeaks');
     const copyDebugJson = document.getElementById('debugCopyJson');
     const downloadDebugJson = document.getElementById('debugDownloadJson');
+    const cameraProfileSelect = document.getElementById('debugCameraProfileSelect');
     const captureButton = document.getElementById('captureButton');
     const mobileMenuToggle = document.getElementById('mobileMenuToggle');
 
@@ -3827,6 +4106,12 @@
         downloadDebugSnapshot();
       });
     }
+    if (cameraProfileSelect) {
+      cameraProfileSelect.value = STATE.cameraProfile;
+      cameraProfileSelect.addEventListener('change', function () {
+        setCameraProfile(cameraProfileSelect.value);
+      });
+    }
     if (mobileMenuToggle) {
       mobileMenuToggle.addEventListener('click', function () {
         setMobileMenuCollapsed(!STATE.mobileMenuCollapsed);
@@ -3845,7 +4130,10 @@
   window.addEventListener('load', function () {
     console.log('[recreate-shell] page loaded');
     console.log('[recreate-shell] asset base:', ASSET_BASE);
+    STATE.cameraProfile = getInitialCameraProfile();
+    STATE.physicsProfile = getInitialPhysicsProfile();
     console.log('[recreate-shell] video settings:', videoSettings());
+    console.log('[recreate-shell] physics profile:', getPhysicsProfileName());
 
     layoutCanvases(_videoAspect);
     runDependencyChecks();

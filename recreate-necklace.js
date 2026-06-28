@@ -164,6 +164,30 @@
     POSE_JUMP_MAX_OFFSET_Y: 8.0,
     POSE_JUMP_SOFT_VELOCITY_DAMPING: 0.96,
     POSE_JUMP_PENDANT_VELOCITY_DAMPING: 0.9,
+    // Phase 4 mobile-only quality gate. It gates visual application, not WebAR/solvePnP/follower pose.
+    POSE_QUALITY_ENABLED: true,
+    POSE_QUALITY_WARMUP_SEC: 0.65,
+    POSE_QUALITY_SUSPECT_Y_DELTA: 8.0,
+    POSE_QUALITY_BAD_Y_DELTA: 22.0,
+    POSE_QUALITY_SUSPECT_RAW_Y_DELTA: 3.4,
+    POSE_QUALITY_BAD_RAW_Y_DELTA: 8.5,
+    POSE_QUALITY_SUSPECT_NECK_WIDTH_DELTA: 9.0,
+    POSE_QUALITY_BAD_NECK_WIDTH_DELTA: 18.0,
+    POSE_QUALITY_CENTER_OFFSET_NORM: 0.16,
+    POSE_QUALITY_BACK_OFFSET_NORM: 0.18,
+    POSE_QUALITY_PITCH_STEP: 0.09,
+    POSE_QUALITY_YAW_STEP: 0.16,
+    POSE_QUALITY_GOOD_BLEND: 0.32,
+    POSE_QUALITY_SUSPECT_BLEND: 0.055,
+    POSE_QUALITY_BAD_BLEND: 0.025,
+    POSE_QUALITY_RECOVERY_SEC: 0.75,
+    POSE_QUALITY_MAX_COUNTER_Y: 6.0,
+    POSE_QUALITY_COUNTER_RATE: 1.4,
+    POSE_QUALITY_SOFT_VELOCITY_DAMPING: 0.985,
+    POSE_QUALITY_PENDANT_VELOCITY_DAMPING: 0.92,
+    POSE_QUALITY_REST_BLEND_MULT: 4.0,
+    POSE_QUALITY_REST_BLEND_MIN: 0.055,
+    POSE_QUALITY_FREEDOM_SCALE: 0.4,
     CHAIN_GAP: 1.0,
     // Geometry-only chain shaping. These keep the front point centered while making side arcs less inward.
     CHAIN_WIDTH_SCALE: 1.11,
@@ -482,6 +506,21 @@
       backOffsetNorm: null,
       triggerCount: 0,
     },
+    poseQuality: {
+      mode: 'good',
+      reason: '-',
+      recoveryUntil: 0,
+      recoveryRemaining: 0,
+      warmupUntil: 0,
+      acceptedPoseY: null,
+      counterY: 0,
+      targetCounterY: 0,
+      liveDeltaY: 0,
+      blend: 1,
+      neckWidthRest: null,
+      neckWidthDelta: 0,
+      triggerCount: 0,
+    },
     neckCenter: {
       ready: false,
       confidence: 1,
@@ -543,6 +582,16 @@
       poseJumpCenterOffsetNorm: null,
       poseJumpBackOffsetNorm: null,
       poseJumpTriggerCount: 0,
+      poseQualityMode: 'good',
+      poseQualityReason: '-',
+      poseQualityRecovery: 0,
+      poseQualityBlend: 1,
+      poseQualityCounterY: 0,
+      poseQualityAcceptedY: null,
+      poseQualityLiveDeltaY: 0,
+      poseQualityNeckWidthRest: null,
+      poseQualityNeckWidthDelta: 0,
+      poseQualityTriggerCount: 0,
       unsafeReason: '-',
       chainPointCount: null,
       chainTopScreenY: null,
@@ -856,6 +905,25 @@
     return isLikelyMobileRuntime();
   }
 
+  function getPoseQualityOverride() {
+    try {
+      const params = new URLSearchParams(window.location.search || '');
+      const value = (params.get('poseQuality') || '').toLowerCase();
+      if (value === 'on' || value === '1' || value === 'true') return true;
+      if (value === 'off' || value === '0' || value === 'false') return false;
+    } catch (e) {
+      // Keep automatic runtime selection.
+    }
+    return null;
+  }
+
+  function isPoseQualityEnabled() {
+    if (!PARAMS.POSE_QUALITY_ENABLED) return false;
+    const override = getPoseQualityOverride();
+    if (override !== null) return override;
+    return isLikelyMobileRuntime();
+  }
+
   function getEffectivePhysicsDebug() {
     const profile = getPhysicsProfile();
     return {
@@ -871,6 +939,7 @@
       pendantDampingGlb: effectivePendantDamping(PARAMS.GLB_SWING_DAMPING),
       pendantYawKick: effectivePendantYawKick(),
       poseJumpDampingEnabled: isPoseJumpDampingEnabled(),
+      poseQualityEnabled: isPoseQualityEnabled(),
     };
   }
 
@@ -906,6 +975,24 @@
       POSE_JUMP_RECOVERY_SEC: PARAMS.POSE_JUMP_RECOVERY_SEC,
       POSE_JUMP_OFFSET_STRENGTH: PARAMS.POSE_JUMP_OFFSET_STRENGTH,
       POSE_JUMP_MAX_OFFSET_Y: PARAMS.POSE_JUMP_MAX_OFFSET_Y,
+      POSE_QUALITY_ENABLED: PARAMS.POSE_QUALITY_ENABLED,
+      POSE_QUALITY_SUSPECT_Y_DELTA: PARAMS.POSE_QUALITY_SUSPECT_Y_DELTA,
+      POSE_QUALITY_BAD_Y_DELTA: PARAMS.POSE_QUALITY_BAD_Y_DELTA,
+      POSE_QUALITY_SUSPECT_RAW_Y_DELTA: PARAMS.POSE_QUALITY_SUSPECT_RAW_Y_DELTA,
+      POSE_QUALITY_BAD_RAW_Y_DELTA: PARAMS.POSE_QUALITY_BAD_RAW_Y_DELTA,
+      POSE_QUALITY_SUSPECT_NECK_WIDTH_DELTA: PARAMS.POSE_QUALITY_SUSPECT_NECK_WIDTH_DELTA,
+      POSE_QUALITY_BAD_NECK_WIDTH_DELTA: PARAMS.POSE_QUALITY_BAD_NECK_WIDTH_DELTA,
+      POSE_QUALITY_CENTER_OFFSET_NORM: PARAMS.POSE_QUALITY_CENTER_OFFSET_NORM,
+      POSE_QUALITY_BACK_OFFSET_NORM: PARAMS.POSE_QUALITY_BACK_OFFSET_NORM,
+      POSE_QUALITY_PITCH_STEP: PARAMS.POSE_QUALITY_PITCH_STEP,
+      POSE_QUALITY_YAW_STEP: PARAMS.POSE_QUALITY_YAW_STEP,
+      POSE_QUALITY_GOOD_BLEND: PARAMS.POSE_QUALITY_GOOD_BLEND,
+      POSE_QUALITY_SUSPECT_BLEND: PARAMS.POSE_QUALITY_SUSPECT_BLEND,
+      POSE_QUALITY_BAD_BLEND: PARAMS.POSE_QUALITY_BAD_BLEND,
+      POSE_QUALITY_RECOVERY_SEC: PARAMS.POSE_QUALITY_RECOVERY_SEC,
+      POSE_QUALITY_WARMUP_SEC: PARAMS.POSE_QUALITY_WARMUP_SEC,
+      POSE_QUALITY_MAX_COUNTER_Y: PARAMS.POSE_QUALITY_MAX_COUNTER_Y,
+      POSE_QUALITY_COUNTER_RATE: PARAMS.POSE_QUALITY_COUNTER_RATE,
       PENDANT_MODE: PARAMS.PENDANT_MODE,
       PHYS_ENABLED: PARAMS.PHYS_ENABLED,
       PHYS_DAMPING: PARAMS.PHYS_DAMPING,
@@ -1292,6 +1379,13 @@
     STATE.motionPeaks.last2sChainRestDev = 0;
     STATE.motionPeaks.samples = [];
     resetPoseJumpDamping();
+    resetPoseQualityGate(
+      STATE.motionDebug && STATE.motionDebug.poseParentY,
+      STATE.motionDebug && (
+        STATE.motionDebug.poseJumpNeckWidthPx ||
+        STATE.motionDebug.poseQualityNeckWidthRest
+      )
+    );
     resetDebugSamples();
     updateDebugStats();
   }
@@ -2657,6 +2751,192 @@
     return triggerPoseJumpDamping(reasons.join(' + '), targetOffsetY, now);
   }
 
+  function resetPoseQualityGate(liveY, neckWidthPx, now) {
+    const quality = STATE.poseQuality;
+    const t = Number.isFinite(now) ? now : performance.now() / 1000;
+    quality.mode = 'good';
+    quality.reason = '-';
+    quality.recoveryUntil = 0;
+    quality.recoveryRemaining = 0;
+    quality.warmupUntil = t + Math.max(0, PARAMS.POSE_QUALITY_WARMUP_SEC);
+    quality.acceptedPoseY = Number.isFinite(liveY) ? liveY : null;
+    quality.counterY = 0;
+    quality.targetCounterY = 0;
+    quality.liveDeltaY = 0;
+    quality.blend = 1;
+    quality.neckWidthRest = Number.isFinite(neckWidthPx) ? neckWidthPx : null;
+    quality.neckWidthDelta = 0;
+    quality.triggerCount = 0;
+  }
+
+  function poseQualitySnapshot(now) {
+    const quality = STATE.poseQuality;
+    const t = Number.isFinite(now) ? now : performance.now() / 1000;
+    quality.recoveryRemaining = Math.max(0, quality.recoveryUntil - t);
+    if (!isPoseQualityEnabled()) {
+      quality.mode = 'good';
+      quality.reason = '-';
+      quality.recoveryRemaining = 0;
+      quality.counterY = 0;
+      quality.targetCounterY = 0;
+      quality.blend = 1;
+    }
+    return {
+      mode: quality.mode,
+      reason: quality.reason,
+      recoveryRemaining: quality.recoveryRemaining,
+      blend: quality.blend,
+      counterY: quality.counterY,
+      acceptedPoseY: quality.acceptedPoseY,
+      liveDeltaY: quality.liveDeltaY,
+      neckWidthRest: quality.neckWidthRest,
+      neckWidthDelta: quality.neckWidthDelta,
+      triggerCount: quality.triggerCount,
+    };
+  }
+
+  function updatePoseQualityGate(liveY, pitchStep, yawStep, rawYDelta, dt, stalledFrame, landmarkMetrics, previousUnsafeReason, now) {
+    const quality = STATE.poseQuality;
+    const metrics = landmarkMetrics || {};
+    const neckWidthPx = Number.isFinite(metrics.neckWidthPx) ? metrics.neckWidthPx : null;
+    const centerOffsetNorm = Number.isFinite(metrics.centerOffsetNorm) ? metrics.centerOffsetNorm : null;
+    const backOffsetNorm = Number.isFinite(metrics.backOffsetNorm) ? metrics.backOffsetNorm : null;
+
+    if (!isPoseQualityEnabled()) {
+      resetPoseQualityGate(liveY, neckWidthPx);
+      return poseQualitySnapshot(now);
+    }
+
+    if (!Number.isFinite(quality.acceptedPoseY) && Number.isFinite(liveY)) {
+      quality.acceptedPoseY = liveY;
+    }
+    if (!Number.isFinite(quality.neckWidthRest) && Number.isFinite(neckWidthPx)) {
+      quality.neckWidthRest = neckWidthPx;
+    }
+
+    const liveDeltaY = Number.isFinite(liveY) && Number.isFinite(quality.acceptedPoseY)
+      ? liveY - quality.acceptedPoseY
+      : 0;
+    const neckWidthDelta = Number.isFinite(neckWidthPx) && Number.isFinite(quality.neckWidthRest)
+      ? neckWidthPx - quality.neckWidthRest
+      : 0;
+    const absLiveDeltaY = Math.abs(liveDeltaY);
+    const absRawYDelta = Math.abs(Number.isFinite(rawYDelta) ? rawYDelta : 0);
+    const absNeckWidthDelta = Math.abs(neckWidthDelta);
+    const absCenterOffset = Math.abs(Number.isFinite(centerOffsetNorm) ? centerOffsetNorm : 0);
+    const absBackOffset = Math.abs(Number.isFinite(backOffsetNorm) ? backOffsetNorm : 0);
+    const previousChainLimit = previousUnsafeReason === 'chain near soft limit';
+
+    const badReasons = [];
+    const suspectReasons = [];
+    const t = Number.isFinite(now) ? now : performance.now() / 1000;
+    const inWarmup = t < (quality.warmupUntil || 0);
+    if (inWarmup) {
+      quality.mode = 'warmup';
+      quality.reason = 'quality warmup';
+      quality.recoveryRemaining = Math.max(0, quality.warmupUntil - t);
+      quality.blend = 1;
+      quality.acceptedPoseY = Number.isFinite(liveY) ? liveY : quality.acceptedPoseY;
+      quality.neckWidthRest = Number.isFinite(neckWidthPx) ? neckWidthPx : quality.neckWidthRest;
+      quality.liveDeltaY = 0;
+      quality.neckWidthDelta = 0;
+      quality.counterY = 0;
+      quality.targetCounterY = 0;
+      return poseQualitySnapshot(t);
+    }
+
+    const clearPoseDrift = absLiveDeltaY >= PARAMS.POSE_QUALITY_SUSPECT_Y_DELTA;
+    const clearRawMove = absRawYDelta >= PARAMS.POSE_QUALITY_SUSPECT_RAW_Y_DELTA;
+    const clearNeckDrift = absNeckWidthDelta >= PARAMS.POSE_QUALITY_SUSPECT_NECK_WIDTH_DELTA;
+    const largePoseDrift = absLiveDeltaY >= PARAMS.POSE_QUALITY_BAD_Y_DELTA;
+    const largeRawMove = absRawYDelta >= PARAMS.POSE_QUALITY_BAD_RAW_Y_DELTA;
+    const largeNeckDrift = absNeckWidthDelta >= PARAMS.POSE_QUALITY_BAD_NECK_WIDTH_DELTA;
+    const biasWithMotion = (absCenterOffset >= PARAMS.POSE_QUALITY_CENTER_OFFSET_NORM ||
+      absBackOffset >= PARAMS.POSE_QUALITY_BACK_OFFSET_NORM) &&
+      (clearPoseDrift || clearRawMove || clearNeckDrift);
+
+    if (stalledFrame) badReasons.push('frame stall');
+    if (largePoseDrift) badReasons.push('pose Y drift');
+    if (largeRawMove) badReasons.push('raw Y jump');
+    if (largePoseDrift && largeNeckDrift) badReasons.push('combined neck width drift');
+
+    if (clearPoseDrift) suspectReasons.push('pose Y drift');
+    if (clearRawMove) suspectReasons.push('raw Y delta');
+    if (clearNeckDrift && (clearPoseDrift || clearRawMove)) suspectReasons.push('neck width drift');
+    if (pitchStep >= PARAMS.POSE_QUALITY_PITCH_STEP) suspectReasons.push('pitch step');
+    if (yawStep >= PARAMS.POSE_QUALITY_YAW_STEP) suspectReasons.push('yaw step');
+    if (biasWithMotion) suspectReasons.push('landmark bias moving');
+    if (previousChainLimit && (clearPoseDrift || clearRawMove || clearNeckDrift)) {
+      suspectReasons.push('previous chain limit with drift');
+    }
+
+    let mode = 'good';
+    let reason = '-';
+    if (badReasons.length) {
+      mode = 'bad';
+      reason = badReasons.join(' + ');
+    } else if (suspectReasons.length) {
+      mode = 'suspect';
+      reason = suspectReasons.join(' + ');
+    }
+
+    if (mode !== 'good') {
+      quality.triggerCount++;
+      quality.recoveryUntil = Math.max(
+        quality.recoveryUntil || 0,
+        t + Math.max(0.12, PARAMS.POSE_QUALITY_RECOVERY_SEC)
+      );
+      dampSoftChainVelocity(PARAMS.POSE_QUALITY_SOFT_VELOCITY_DAMPING);
+      dampPendantVelocity(PARAMS.POSE_QUALITY_PENDANT_VELOCITY_DAMPING);
+    }
+
+    const recoveryRemaining = Math.max(0, quality.recoveryUntil - t);
+    const recovering = recoveryRemaining > 0;
+    if (mode === 'good' && recovering) {
+      mode = 'suspect';
+      reason = 'quality recovery';
+    }
+
+    const baseBlend = mode === 'bad'
+      ? PARAMS.POSE_QUALITY_BAD_BLEND
+      : mode === 'suspect'
+        ? PARAMS.POSE_QUALITY_SUSPECT_BLEND
+        : PARAMS.POSE_QUALITY_GOOD_BLEND;
+    const blend = 1 - Math.pow(1 - THREE.MathUtils.clamp(baseBlend, 0, 1), Math.max(0.25, dt * 60));
+
+    if (Number.isFinite(liveY) && Number.isFinite(quality.acceptedPoseY)) {
+      quality.acceptedPoseY += (liveY - quality.acceptedPoseY) * blend;
+    } else if (Number.isFinite(liveY)) {
+      quality.acceptedPoseY = liveY;
+    }
+
+    if (Number.isFinite(neckWidthPx) && Number.isFinite(quality.neckWidthRest)) {
+      const neckRestBlend = mode === 'good' ? 0.035 : mode === 'suspect' ? 0.008 : 0;
+      quality.neckWidthRest += (neckWidthPx - quality.neckWidthRest) * neckRestBlend;
+    }
+
+    quality.mode = mode;
+    quality.reason = reason;
+    quality.recoveryRemaining = recoveryRemaining;
+    quality.blend = blend;
+    quality.liveDeltaY = liveDeltaY;
+    quality.neckWidthDelta = neckWidthDelta;
+    quality.targetCounterY = THREE.MathUtils.clamp(
+      Number.isFinite(quality.acceptedPoseY) && Number.isFinite(liveY) ? quality.acceptedPoseY - liveY : 0,
+      -PARAMS.POSE_QUALITY_MAX_COUNTER_Y,
+      PARAMS.POSE_QUALITY_MAX_COUNTER_Y
+    );
+    const maxStep = Math.max(0.1, PARAMS.POSE_QUALITY_COUNTER_RATE) * Math.max(0.25, dt * 60);
+    const counterDelta = THREE.MathUtils.clamp(
+      quality.targetCounterY - quality.counterY,
+      -maxStep,
+      maxStep
+    );
+    quality.counterY += counterDelta;
+
+    return poseQualitySnapshot(t);
+  }
+
   function updateMotionGuardFromChain(chainSimStatus, chainAudit, now) {
     if (!PARAMS.MOTION_GUARD_ENABLED) return motionGuardSnapshot(now);
 
@@ -2671,7 +2951,10 @@
 
   function motionGuardRecoveryFactors() {
     const snapshot = motionGuardSnapshot();
-    if (!PARAMS.MOTION_GUARD_ENABLED || snapshot.recoveryRemaining <= 0) {
+    const qualitySnapshot = poseQualitySnapshot();
+    const qualityActive = isPoseQualityEnabled() &&
+      (qualitySnapshot.mode === 'suspect' || qualitySnapshot.mode === 'bad' || qualitySnapshot.recoveryRemaining > 0);
+    if ((!PARAMS.MOTION_GUARD_ENABLED || snapshot.recoveryRemaining <= 0) && !qualityActive) {
       return {
         strength: 0,
         restBlend: effectiveSoftRestBlend(PARAMS.SOFT_REST_BLEND),
@@ -2680,24 +2963,46 @@
     }
 
     const duration = Math.max(0.1, PARAMS.MOTION_GUARD_RECOVERY_SEC);
-    const strength = smoothstep01(snapshot.recoveryRemaining / duration);
-    const restBlend = Math.max(
+    const strength = PARAMS.MOTION_GUARD_ENABLED
+      ? smoothstep01(snapshot.recoveryRemaining / duration)
+      : 0;
+    const qualityDuration = Math.max(0.1, PARAMS.POSE_QUALITY_RECOVERY_SEC);
+    const qualityStrength = qualityActive
+      ? Math.max(
+          qualitySnapshot.mode === 'bad' ? 1 : 0,
+          qualitySnapshot.mode === 'suspect' ? 0.65 : 0,
+          smoothstep01(qualitySnapshot.recoveryRemaining / qualityDuration)
+        )
+      : 0;
+    const guardRestBlend = Math.max(
       effectiveSoftRestBlend(PARAMS.SOFT_REST_BLEND),
       Math.max(
         effectiveSoftRestBlend(PARAMS.SOFT_REST_BLEND * PARAMS.MOTION_GUARD_REST_BLEND_MULT),
         PARAMS.MOTION_GUARD_REST_BLEND_MIN
       ) * strength
     );
-    const freedomScale = THREE.MathUtils.lerp(
+    const qualityRestBlend = Math.max(
+      effectiveSoftRestBlend(PARAMS.SOFT_REST_BLEND),
+      Math.max(
+        effectiveSoftRestBlend(PARAMS.SOFT_REST_BLEND * PARAMS.POSE_QUALITY_REST_BLEND_MULT),
+        PARAMS.POSE_QUALITY_REST_BLEND_MIN
+      ) * qualityStrength
+    );
+    const guardFreedomScale = THREE.MathUtils.lerp(
       1,
       THREE.MathUtils.clamp(PARAMS.MOTION_GUARD_FREEDOM_SCALE, 0, 1),
       strength
     );
+    const qualityFreedomScale = THREE.MathUtils.lerp(
+      1,
+      THREE.MathUtils.clamp(PARAMS.POSE_QUALITY_FREEDOM_SCALE, 0, 1),
+      qualityStrength
+    );
 
     return {
-      strength: strength,
-      restBlend: restBlend,
-      freedomScale: freedomScale,
+      strength: Math.max(strength, qualityStrength),
+      restBlend: Math.max(guardRestBlend, qualityRestBlend),
+      freedomScale: Math.min(guardFreedomScale, qualityFreedomScale),
     };
   }
 
@@ -3527,6 +3832,16 @@
     setText('debugPoseJumpOffsetY', formatDebugNumber(motion.poseJumpOffsetY, 2));
     setText('debugPoseJumpNeckDelta', formatDebugNumber(motion.poseJumpNeckWidthDelta, 2));
     setText('debugPoseJumpTriggers', Number.isFinite(motion.poseJumpTriggerCount) ? String(motion.poseJumpTriggerCount) : '0');
+    setText('debugPoseQuality', motion.poseQualityMode || 'good');
+    setText('debugPoseQualityReason', motion.poseQualityReason || '-');
+    setText('debugPoseQualityRecovery', formatDebugNumber(motion.poseQualityRecovery, 2));
+    setText('debugPoseQualityBlend', formatDebugNumber(motion.poseQualityBlend, 3));
+    setText('debugPoseQualityCounterY', formatDebugNumber(motion.poseQualityCounterY, 2));
+    setText('debugPoseQualityAcceptedY', formatDebugNumber(motion.poseQualityAcceptedY, 2));
+    setText('debugPoseQualityLiveDeltaY', formatDebugNumber(motion.poseQualityLiveDeltaY, 2));
+    setText('debugPoseQualityNeckWidthRest', formatDebugNumber(motion.poseQualityNeckWidthRest, 1));
+    setText('debugPoseQualityNeckWidthDelta', formatDebugNumber(motion.poseQualityNeckWidthDelta, 1));
+    setText('debugPoseQualityTriggers', Number.isFinite(motion.poseQualityTriggerCount) ? String(motion.poseQualityTriggerCount) : '0');
     setText('debugUnsafeReason', motion.unsafeReason || '-');
     setText('debugChainTopY', formatDebugNumber(motion.chainTopScreenY, 3));
     setText('debugChainFrontY', formatDebugNumber(motion.chainFrontScreenY, 3));
@@ -3821,7 +4136,9 @@
     resetPendantPendulum();
     resetMotionGuard();
     resetPoseJumpDamping();
+    resetPoseQualityGate();
     const poseJumpDebug = poseJumpDampingSnapshot();
+    const poseQualityDebug = poseQualitySnapshot();
     const guardDebug = motionGuardSnapshot();
     setMotionDebug(Object.assign({
       detected: false,
@@ -3851,6 +4168,16 @@
       poseJumpCenterOffsetNorm: null,
       poseJumpBackOffsetNorm: null,
       poseJumpTriggerCount: STATE.poseJumpDamping.triggerCount,
+      poseQualityMode: poseQualityDebug.mode,
+      poseQualityReason: poseQualityDebug.reason,
+      poseQualityRecovery: poseQualityDebug.recoveryRemaining,
+      poseQualityBlend: poseQualityDebug.blend,
+      poseQualityCounterY: poseQualityDebug.counterY,
+      poseQualityAcceptedY: poseQualityDebug.acceptedPoseY,
+      poseQualityLiveDeltaY: poseQualityDebug.liveDeltaY,
+      poseQualityNeckWidthRest: poseQualityDebug.neckWidthRest,
+      poseQualityNeckWidthDelta: poseQualityDebug.neckWidthDelta,
+      poseQualityTriggerCount: poseQualityDebug.triggerCount,
       unsafeReason: guardDebug.reason,
     }, computeChainAuditMetrics()));
   }
@@ -3907,13 +4234,14 @@
     return result;
   }
 
-  function applyTrackingPoseMode(upwardJump, poseJumpSnapshot) {
+  function applyTrackingPoseMode(upwardJump, poseJumpSnapshot, poseQualitySnapshotValue) {
     const applied = { x: 0, y: 0, pitch: 0 };
     if (!REFS.necklaceGroup) return applied;
 
     const mode = PARAMS.TRACKING_POSE_MODE || 'sourceRaw';
     const yawY = PARAMS.YAW_Y_STABILIZER_ENABLED ? STATE.yawYOffset : 0;
     const poseJump = poseJumpSnapshot || poseJumpDampingSnapshot();
+    const poseQuality = poseQualitySnapshotValue || poseQualitySnapshot();
     applied.x = PARAMS.NECK_CENTER_GATE_ENABLED && PARAMS.NECK_CENTER_VISUAL_X_COMP_ENABLED
       ? STATE.neckCenter.visualCompX
       : 0;
@@ -3933,6 +4261,7 @@
 
     applied.y += yawY;
     applied.y += poseJump.offsetY;
+    applied.y += poseQuality.counterY || 0;
     REFS.necklaceGroup.position.x = applied.x;
     REFS.necklaceGroup.position.y = applied.y;
     REFS.necklaceGroup.rotation.x = applied.pitch;
@@ -3987,7 +4316,9 @@
       resetPendantPendulum(yaw, pitch, roll);
       resetMotionGuard();
       resetPoseJumpDamping(liveY, pitch, yaw, null);
+      resetPoseQualityGate(liveY, null, now);
       const poseJumpDebug = poseJumpDampingSnapshot(now);
+      const poseQualityDebug = poseQualitySnapshot(now);
       const guardDebug = motionGuardSnapshot(now);
       setMotionDebug(Object.assign({
         detected: true,
@@ -4019,6 +4350,16 @@
         poseJumpCenterOffsetNorm: null,
         poseJumpBackOffsetNorm: null,
         poseJumpTriggerCount: STATE.poseJumpDamping.triggerCount,
+        poseQualityMode: poseQualityDebug.mode,
+        poseQualityReason: poseQualityDebug.reason,
+        poseQualityRecovery: poseQualityDebug.recoveryRemaining,
+        poseQualityBlend: poseQualityDebug.blend,
+        poseQualityCounterY: poseQualityDebug.counterY,
+        poseQualityAcceptedY: poseQualityDebug.acceptedPoseY,
+        poseQualityLiveDeltaY: poseQualityDebug.liveDeltaY,
+        poseQualityNeckWidthRest: poseQualityDebug.neckWidthRest,
+        poseQualityNeckWidthDelta: poseQualityDebug.neckWidthDelta,
+        poseQualityTriggerCount: poseQualityDebug.triggerCount,
         unsafeReason: guardDebug.reason,
       }, computeChainAuditMetrics()));
       return;
@@ -4062,6 +4403,18 @@
 
     const yawMotion = updateYawYStabilizer(yaw, liveY, dt, stalledFrame);
     const landmarkMetrics = getLandmarkDiagnostics(landmarks);
+    const previousUnsafeReason = STATE.motionDebug && STATE.motionDebug.unsafeReason;
+    const poseQualityDebug = updatePoseQualityGate(
+      liveY,
+      pitchStep,
+      yawMotion.yawStep,
+      yawMotion.rawYDelta,
+      dt,
+      stalledFrame,
+      landmarkMetrics,
+      previousUnsafeReason,
+      now
+    );
     const poseJumpDebug = updatePoseJumpDamping(
       liveY,
       pitch,
@@ -4072,7 +4425,7 @@
       signedSmoothYDelta,
       now
     );
-    const appliedPose = applyTrackingPoseMode(upwardJump, poseJumpDebug);
+    const appliedPose = applyTrackingPoseMode(upwardJump, poseJumpDebug, poseQualityDebug);
     if (upwardJump > PARAMS.SOFT_SPIKE_Y_THRESHOLD) {
       dampSoftChainVelocity(effectiveSoftSpikeVelocityDamping());
     }
@@ -4120,6 +4473,16 @@
       poseJumpCenterOffsetNorm: STATE.poseJumpDamping.centerOffsetNorm,
       poseJumpBackOffsetNorm: STATE.poseJumpDamping.backOffsetNorm,
       poseJumpTriggerCount: STATE.poseJumpDamping.triggerCount,
+      poseQualityMode: poseQualityDebug.mode,
+      poseQualityReason: poseQualityDebug.reason,
+      poseQualityRecovery: poseQualityDebug.recoveryRemaining,
+      poseQualityBlend: poseQualityDebug.blend,
+      poseQualityCounterY: poseQualityDebug.counterY,
+      poseQualityAcceptedY: poseQualityDebug.acceptedPoseY,
+      poseQualityLiveDeltaY: poseQualityDebug.liveDeltaY,
+      poseQualityNeckWidthRest: poseQualityDebug.neckWidthRest,
+      poseQualityNeckWidthDelta: poseQualityDebug.neckWidthDelta,
+      poseQualityTriggerCount: poseQualityDebug.triggerCount,
       unsafeReason: guardDebug.reason,
     }, chainAudit));
   }

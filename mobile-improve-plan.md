@@ -135,7 +135,7 @@ Acceptance check:
 - Debug JSON shows when damping triggered and whether it correlates with visible improvement.
 - No solvePnP, follower setup, camera pipeline, placement calibration, chain geometry, or pendant asset changes are introduced.
 
-Report: Phase 2b implemented as a mobile-only transient pose-jump damping layer. It does not change camera startup, solvePnP, follower setup, base placement, chain geometry, pendant assets, or desktop default behavior. The damping auto-enables on mobile/coarse-pointer runtimes and can be forced with `?poseJumpDamping=on` or disabled with `?poseJumpDamping=off`. It watches existing signals from the current frame: `poseParentY` delta, neck width delta, pitch/yaw step, `centerOffsetNorm`, `backOffsetNorm`, tracking stalls, and Phase 1b landmark metrics. When a short jump is detected, it applies a temporary local Y counter-offset to the necklace group, damps soft-chain Verlet velocity, damps pendant velocity, then fades out over a short recovery window. Debug/export now records `poseJumpMode`, `poseJumpReason`, `poseJumpRecovery`, `poseJumpOffsetY`, neck-width delta, landmark bias values, trigger count, and whether pose-jump damping is enabled. This remains a bridge to Phase 4: Phase 4 should use Phase 2b logs to decide which signals become permanent good/suspect/bad quality inputs instead of copying these thresholds blindly.
+Report: Phase 2b implemented as a mobile-only transient pose-jump damping layer. It does not change camera startup, solvePnP, follower setup, base placement, chain geometry, pendant assets, or desktop default behavior. The damping auto-enables on mobile/coarse-pointer runtimes and can be forced with `?poseJumpDamping=on` or disabled with `?poseJumpDamping=off`. It watches existing signals from the current frame: `poseParentY` delta, neck width delta, pitch/yaw step, `centerOffsetNorm`, `backOffsetNorm`, tracking stalls, and Phase 1b landmark metrics. When a short jump is detected, it applies a temporary local Y counter-offset to the necklace group, damps soft-chain Verlet velocity, damps pendant velocity, then fades out over a short recovery window. Debug/export now records `poseJumpMode`, `poseJumpReason`, `poseJumpRecovery`, `poseJumpOffsetY`, neck-width delta, landmark bias values, trigger count, and whether pose-jump damping is enabled. The `mobile-distance-change-phase2b-calm.json` log confirmed Phase 2b ran correctly and modestly reduced measured `chainTopY`/`chainFrontY` range compared with `poseJumpDamping=off`, but visible shake remained because `poseParentY` still drifted by about `68px` while Phase 2b only applied a small transient counter-offset. The remaining issue is sustained mobile pose/framing drift, not only short pose jumps, so Phase 4 is required.
 
 ## Phase 3. Mobile Placement Calibration
 
@@ -161,7 +161,7 @@ Acceptance check:
 - Pendant remains centered under the front chain point.
 - No solvePnP, follower, or asset transform changes are required.
 
-Report: _Not started yet._
+Report: Phase 4b tuning pass implemented. The pose-quality gate now has a short warm-up window after init/reset/tracking regain, lower max counter Y, per-frame counter rate limiting, relaxed pose/neck/bias thresholds, and more conservative classification rules. `previous chain limit` is no longer a direct `bad` trigger; it only contributes when pose/framing drift is also present. Center/back bias are now supporting signals only and do not trigger `suspect` by themselves. Neck-width drift also requires pose Y drift or raw Y movement before stronger intervention. Existing `?poseQuality=on/off`, Phase 4 debug/export fields, Phase 2b jump damping, camera startup, solvePnP, follower setup, `sourceRaw`, chain geometry, pendant assets, material/link style, and desktop default behavior remain unchanged.
 
 ## Phase 4. Light Pose Quality Gate
 
@@ -188,6 +188,38 @@ Acceptance check:
 - Fast mobile motion no longer produces full-strength necklace jumps.
 - Short tracking glitches recover without a large chain whip.
 - Normal tracking still feels responsive.
+
+Report: Phase 4 implemented as a mobile-only light pose-quality gate. It auto-enables on mobile/coarse-pointer runtimes and can be forced with `?poseQuality=on` or disabled with `?poseQuality=off`. It classifies frames as `good`, `suspect`, or `bad` using existing measured signals only: pose Y drift, raw Y delta, neck-width drift, center/back landmark bias, pitch/yaw step, frame stalls, and prior chain soft-limit state. It does not change camera startup, solvePnP, follower setup, `sourceRaw`, chain geometry, pendant assets, or desktop default behavior. The gate maintains an accepted pose-Y baseline, applies a clamped local counter-offset to the necklace group, damps soft-chain and pendant velocity during suspect/bad frames, and feeds the existing soft-chain recovery path with stronger rest blend and lower freedom. Debug/export now records `poseQualityMode`, `poseQualityReason`, `poseQualityRecovery`, `poseQualityBlend`, `poseQualityCounterY`, `poseQualityAcceptedY`, `poseQualityLiveDeltaY`, `poseQualityNeckWidthRest`, `poseQualityNeckWidthDelta`, `poseQualityTriggerCount`, and whether pose quality is enabled. The first idle log after Phase 4 showed the approach is directionally valid but over-aggressive: chain screen-position ranges were numerically small and chain rest deviation stayed low, but `poseQualityCounterY` ranged roughly from `-4.1` to `+11.6` during idle and the gate entered `bad`/`suspect` because of prior chain-limit state, center bias, and neck-width drift. This made the visual result feel shakier. Phase 4 therefore needs a tuning pass before Phase 5.
+
+## Phase 4b. Pose Quality Tuning Pass 1
+
+Goal:
+Make Phase 4 conservative enough that idle/mobile-forward does not feel worse, while still catching real phone-distance/framing drift.
+
+What to implement:
+
+- Keep this as tuning only; do not change camera startup, solvePnP, follower setup, `sourceRaw`, chain geometry, pendant assets, or desktop default behavior.
+- Add a short warm-up after init/reset/tracking regain so quality classification cannot trigger on the first few frames.
+- Remove `previous chain limit` as a direct `bad` trigger. Keep it only as a weak supporting diagnostic unless pose/framing drift is also clearly present.
+- Make center/back landmark bias supporting signals only. They should not trigger `suspect` by themselves during idle.
+- Lower and rate-limit the Phase 4 counter-offset so it cannot create large visible local Y jumps during idle.
+- Relax neck-width sensitivity for idle; require neck-width drift to combine with pose Y drift or raw Y delta before strong intervention.
+- Keep `?poseQuality=on/off` and all Phase 4 debug fields so logs can compare before/after tuning.
+
+Implementation hints:
+
+- Prefer smaller threshold and blend changes over adding new systems.
+- Do not remove Phase 2b; keep it as a narrow transient jump damper and diagnostic bridge.
+- The gate should mostly stay `good` during `mobile-idle-forward-phase4-calm`.
+- During distance-change, the gate may enter `suspect`, but `bad` should be rare and reserved for frame stalls, tracking loss/regain, or large combined pose/framing jumps.
+
+Acceptance check:
+
+- Idle forward with `?physics=calm&poseQuality=on` does not look shakier than `poseQuality=off`.
+- `poseQualityCounterY` stays small during idle, with no large first-frame counter jump.
+- `Pose Quality` is mostly `good` during idle.
+- Distance-change still shows some `suspect` activity and reduced `chainTopY`/`chainFrontY` range compared with Phase 2b.
+- `node --check recreate-necklace.js` passes.
 
 Report: _Not started yet._
 

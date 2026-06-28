@@ -28,7 +28,7 @@
     <script src="helpers/landmarksStabilizers/OneEuroLMStabilizer.js"></script>
 
     <!-- Our clean rebuild entry point. Phase 6 adds custom pendant product plane. -->
-    <script src="recreate-necklace.js?v=phase5-1"></script>
+    <script src="recreate-necklace.js?v=phase5b-2"></script>
 
     <style>
       :root {
@@ -683,6 +683,22 @@
         <div class="debug-stat">
           <span class="debug-stat__label">Derived Reset</span>
           <span class="debug-stat__value" id="debugDerivedFilterReset">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Chain Settle</span>
+          <span class="debug-stat__value" id="debugChainSettle">Off</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Settle Reason</span>
+          <span class="debug-stat__value" id="debugChainSettleReason">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Settle Strength</span>
+          <span class="debug-stat__value" id="debugChainSettleStrength">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Settle Prev Dev</span>
+          <span class="debug-stat__value" id="debugChainSettlePrevDev">-</span>
         </div>
         <div class="debug-stat">
           <span class="debug-stat__label">Unsafe Reason</span>

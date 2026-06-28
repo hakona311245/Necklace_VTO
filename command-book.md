@@ -54,25 +54,25 @@ https://example-name.trycloudflare.com/
 Current recommended mobile test:
 
 ```text
-https://example-name.trycloudflare.com/?physics=calm&poseQuality=on&derivedFilter=on
+https://example-name.trycloudflare.com/?v=phase5b-2
 ```
 
-Phase 5 idle test:
+Phase 5b idle test:
 
 ```text
-https://example-name.trycloudflare.com/?physics=calm&poseQuality=on&derivedFilter=on
+https://example-name.trycloudflare.com/?v=phase5b-2
 ```
 
-Phase 5 distance-change comparison, derived filter on:
+Phase 5b idle comparison, chain settle off:
 
 ```text
-https://example-name.trycloudflare.com/?physics=calm&poseQuality=on&derivedFilter=on
+https://example-name.trycloudflare.com/?chainSettle=off&v=phase5b-2
 ```
 
-Phase 5 distance-change comparison, derived filter off:
+Phase 5b slow-turn test:
 
 ```text
-https://example-name.trycloudflare.com/?physics=calm&poseQuality=on&derivedFilter=off
+https://example-name.trycloudflare.com/?v=phase5b-2
 ```
 
 Old camera fallback:
@@ -90,7 +90,7 @@ https://example-name.trycloudflare.com/?cameraProfile=standardIdeal
 Full diagnostic comparison URL:
 
 ```text
-https://example-name.trycloudflare.com/?cameraProfile=standardIdeal&physics=calm&poseJumpDamping=on&poseQuality=on&derivedFilter=on
+https://example-name.trycloudflare.com/?cameraProfile=standardIdeal&v=phase5b-2
 ```
 
 ## Query Settings
@@ -112,7 +112,7 @@ Physics profile:
 ?physics=calm
 ```
 
-`default` is desktop baseline. `mobile` is the mobile auto profile. `calm` is the stronger handheld-camera-shake test profile.
+`default` is desktop baseline. `calm` is the current mobile auto profile. `mobile` remains as the older mobile fallback for comparison.
 
 Pose jump damping:
 
@@ -137,10 +137,19 @@ Derived visual filter:
 
 On mobile, derived filter is on by default. On desktop, it stays off unless explicitly enabled.
 
+Soft chain idle settling:
+
+```text
+?chainSettle=on
+?chainSettle=off
+```
+
+By default, mobile/coarse-pointer devices now use the accepted Phase 5b stack: `calm` physics, pose jump damping on, pose quality on, derived filter on, and chain settling on. Desktop keeps the default desktop behavior unless these settings are forced by URL.
+
 Combine settings with `&`:
 
 ```text
-https://example-name.trycloudflare.com/?physics=calm&poseQuality=on&derivedFilter=on
+https://example-name.trycloudflare.com/?v=phase5b-2
 ```
 
 ## Debug Log Capture
@@ -155,10 +164,9 @@ https://example-name.trycloudflare.com/?physics=calm&poseQuality=on&derivedFilte
 Suggested log names:
 
 ```text
-mobile-idle-forward-phase5-calm.json
-mobile-slow-turn-phase5-calm.json
-mobile-distance-change-phase5-calm.json
-mobile-distance-change-phase5-off.json
+mobile-idle-forward-phase5b-calm.json
+mobile-idle-forward-phase5b-off.json
+mobile-slow-turn-phase5b-calm.json
 ```
 
 Check these fields in the debug drawer:
@@ -169,6 +177,8 @@ Pose Jump
 Pose Quality
 Derived Filter
 Derived Y
+Chain Settle
+Settle Strength
 Quality Counter Y
 Quality Triggers
 Chain Max Dev

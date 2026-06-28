@@ -198,6 +198,16 @@
     DERIVED_FILTER_ROT_GOOD_BLEND: 0.34,
     DERIVED_FILTER_ROT_SUSPECT_BLEND: 0.18,
     DERIVED_FILTER_ROT_BAD_BLEND: 0.1,
+    // Phase 5b mobile/calm-only soft-chain idle settling.
+    CHAIN_SETTLE_ENABLED: true,
+    CHAIN_SETTLE_REST_DEV_START: 3.0,
+    CHAIN_SETTLE_REST_DEV_FULL: 8.0,
+    CHAIN_SETTLE_RAW_Y_MAX: 2.3,
+    CHAIN_SETTLE_YAW_STEP_MAX: 0.075,
+    CHAIN_SETTLE_LOCAL_Y_STEP_MAX: 0.95,
+    CHAIN_SETTLE_REST_BLEND_MULT: 1.45,
+    CHAIN_SETTLE_FREEDOM_SCALE: 0.78,
+    CHAIN_SETTLE_VELOCITY_DAMPING: 0.35,
     CHAIN_GAP: 1.0,
     // Geometry-only chain shaping. These keep the front point centered while making side arcs less inward.
     CHAIN_WIDTH_SCALE: 1.11,
@@ -552,6 +562,17 @@
       rawPendantRoll: null,
       pendantRoll: null,
     },
+    chainSettle: {
+      enabled: false,
+      mode: 'off',
+      reason: '-',
+      strength: 0,
+      restBlend: 0,
+      freedomScale: 1,
+      velocityDamping: 0,
+      previousChainMaxRestDev: null,
+      localYStep: 0,
+    },
     neckCenter: {
       ready: false,
       confidence: 1,
@@ -641,6 +662,15 @@
       derivedFilterPendantPitch: null,
       derivedFilterRawPendantRoll: null,
       derivedFilterPendantRoll: null,
+      chainSettleEnabled: false,
+      chainSettleMode: 'off',
+      chainSettleReason: '-',
+      chainSettleStrength: 0,
+      chainSettleRestBlend: 0,
+      chainSettleFreedomScale: 1,
+      chainSettleVelocityDamping: 0,
+      chainSettlePrevDev: null,
+      chainSettleLocalYStep: 0,
       unsafeReason: '-',
       chainPointCount: null,
       chainTopScreenY: null,
@@ -881,7 +911,7 @@
     } catch (e) {
       // Keep automatic physics profile selection.
     }
-    return isLikelyMobileRuntime() ? 'mobile' : DEFAULT_PHYSICS_PROFILE;
+    return isLikelyMobileRuntime() ? 'calm' : DEFAULT_PHYSICS_PROFILE;
   }
 
   function getPhysicsProfileName() {
@@ -992,6 +1022,25 @@
     return isLikelyMobileRuntime();
   }
 
+  function getChainSettleOverride() {
+    try {
+      const params = new URLSearchParams(window.location.search || '');
+      const value = (params.get('chainSettle') || '').toLowerCase();
+      if (value === 'on' || value === '1' || value === 'true') return true;
+      if (value === 'off' || value === '0' || value === 'false') return false;
+    } catch (e) {
+      // Keep automatic runtime selection.
+    }
+    return null;
+  }
+
+  function isChainSettleEnabled() {
+    if (!PARAMS.CHAIN_SETTLE_ENABLED) return false;
+    const override = getChainSettleOverride();
+    if (override !== null) return override;
+    return isLikelyMobileRuntime() && getPhysicsProfileName() === 'calm';
+  }
+
   function getEffectivePhysicsDebug() {
     const profile = getPhysicsProfile();
     return {
@@ -1009,6 +1058,7 @@
       poseJumpDampingEnabled: isPoseJumpDampingEnabled(),
       poseQualityEnabled: isPoseQualityEnabled(),
       derivedFilterEnabled: isDerivedFilterEnabled(),
+      chainSettleEnabled: isChainSettleEnabled(),
     };
   }
 
@@ -1071,6 +1121,15 @@
       DERIVED_FILTER_ROT_GOOD_BLEND: PARAMS.DERIVED_FILTER_ROT_GOOD_BLEND,
       DERIVED_FILTER_ROT_SUSPECT_BLEND: PARAMS.DERIVED_FILTER_ROT_SUSPECT_BLEND,
       DERIVED_FILTER_ROT_BAD_BLEND: PARAMS.DERIVED_FILTER_ROT_BAD_BLEND,
+      CHAIN_SETTLE_ENABLED: PARAMS.CHAIN_SETTLE_ENABLED,
+      CHAIN_SETTLE_REST_DEV_START: PARAMS.CHAIN_SETTLE_REST_DEV_START,
+      CHAIN_SETTLE_REST_DEV_FULL: PARAMS.CHAIN_SETTLE_REST_DEV_FULL,
+      CHAIN_SETTLE_RAW_Y_MAX: PARAMS.CHAIN_SETTLE_RAW_Y_MAX,
+      CHAIN_SETTLE_YAW_STEP_MAX: PARAMS.CHAIN_SETTLE_YAW_STEP_MAX,
+      CHAIN_SETTLE_LOCAL_Y_STEP_MAX: PARAMS.CHAIN_SETTLE_LOCAL_Y_STEP_MAX,
+      CHAIN_SETTLE_REST_BLEND_MULT: PARAMS.CHAIN_SETTLE_REST_BLEND_MULT,
+      CHAIN_SETTLE_FREEDOM_SCALE: PARAMS.CHAIN_SETTLE_FREEDOM_SCALE,
+      CHAIN_SETTLE_VELOCITY_DAMPING: PARAMS.CHAIN_SETTLE_VELOCITY_DAMPING,
       PENDANT_MODE: PARAMS.PENDANT_MODE,
       PHYS_ENABLED: PARAMS.PHYS_ENABLED,
       PHYS_DAMPING: PARAMS.PHYS_DAMPING,
@@ -1465,7 +1524,9 @@
       )
     );
     resetDerivedFilter('reset peaks');
+    resetChainSettle('reset peaks');
     Object.assign(STATE.motionDebug, derivedFilterDebugFields());
+    Object.assign(STATE.motionDebug, chainSettleDebugFields());
     resetDebugSamples();
     updateDebugStats();
   }
@@ -3259,6 +3320,130 @@
     };
   }
 
+  function resetChainSettle(reason) {
+    const settle = STATE.chainSettle;
+    settle.enabled = isChainSettleEnabled();
+    settle.mode = settle.enabled ? 'idle' : 'off';
+    settle.reason = reason || '-';
+    settle.strength = 0;
+    settle.restBlend = effectiveSoftRestBlend(PARAMS.SOFT_REST_BLEND);
+    settle.freedomScale = 1;
+    settle.velocityDamping = 0;
+    settle.previousChainMaxRestDev = null;
+    settle.localYStep = 0;
+  }
+
+  function chainSettleDebugFields() {
+    const settle = STATE.chainSettle;
+    return {
+      chainSettleEnabled: isChainSettleEnabled(),
+      chainSettleMode: settle.mode,
+      chainSettleReason: settle.reason,
+      chainSettleStrength: settle.strength,
+      chainSettleRestBlend: settle.restBlend,
+      chainSettleFreedomScale: settle.freedomScale,
+      chainSettleVelocityDamping: settle.velocityDamping,
+      chainSettlePrevDev: settle.previousChainMaxRestDev,
+      chainSettleLocalYStep: settle.localYStep,
+    };
+  }
+
+  function chainSettleRecoveryFactors() {
+    const settle = STATE.chainSettle;
+    if (!settle || !settle.enabled || settle.strength <= 0) {
+      return {
+        strength: 0,
+        restBlend: effectiveSoftRestBlend(PARAMS.SOFT_REST_BLEND),
+        freedomScale: 1,
+      };
+    }
+    return {
+      strength: settle.strength,
+      restBlend: settle.restBlend,
+      freedomScale: settle.freedomScale,
+    };
+  }
+
+  function updateChainSettleState(appliedPose, yawMotion, poseQualitySnapshotValue, stalledFrame) {
+    const settle = STATE.chainSettle;
+    const enabled = isChainSettleEnabled();
+    const previousDebug = STATE.motionDebug || {};
+    const previousDev = previousDebug.chainMaxRestDev;
+    const previousCompY = previousDebug.compensationY;
+    const currentCompY = appliedPose && Number.isFinite(appliedPose.y) ? appliedPose.y : null;
+    const localYStep = Number.isFinite(previousCompY) && Number.isFinite(currentCompY)
+      ? Math.abs(currentCompY - previousCompY)
+      : 0;
+    const rawYDelta = yawMotion && Number.isFinite(yawMotion.rawYDelta) ? Math.abs(yawMotion.rawYDelta) : 0;
+    const yawStep = yawMotion && Number.isFinite(yawMotion.yawStep) ? Math.abs(yawMotion.yawStep) : 0;
+    const qualityMode = poseQualitySnapshotValue && poseQualitySnapshotValue.mode;
+
+    settle.enabled = enabled;
+    settle.previousChainMaxRestDev = Number.isFinite(previousDev) ? previousDev : null;
+    settle.localYStep = localYStep;
+    settle.restBlend = effectiveSoftRestBlend(PARAMS.SOFT_REST_BLEND);
+    settle.freedomScale = 1;
+    settle.velocityDamping = 0;
+    settle.strength = 0;
+
+    if (!enabled) {
+      settle.mode = 'off';
+      settle.reason = 'disabled';
+      return chainSettleDebugFields();
+    }
+    if (stalledFrame) {
+      settle.mode = 'idle';
+      settle.reason = 'frame stall';
+      return chainSettleDebugFields();
+    }
+    if (qualityMode !== 'good') {
+      settle.mode = 'idle';
+      settle.reason = 'pose quality not good';
+      return chainSettleDebugFields();
+    }
+    if (!Number.isFinite(previousDev)) {
+      settle.mode = 'idle';
+      settle.reason = 'no previous chain audit';
+      return chainSettleDebugFields();
+    }
+    if (previousDev < PARAMS.CHAIN_SETTLE_REST_DEV_START) {
+      settle.mode = 'idle';
+      settle.reason = 'chain dev low';
+      return chainSettleDebugFields();
+    }
+    if (rawYDelta > PARAMS.CHAIN_SETTLE_RAW_Y_MAX) {
+      settle.mode = 'idle';
+      settle.reason = 'raw Y moving';
+      return chainSettleDebugFields();
+    }
+    if (yawStep > PARAMS.CHAIN_SETTLE_YAW_STEP_MAX) {
+      settle.mode = 'idle';
+      settle.reason = 'yaw moving';
+      return chainSettleDebugFields();
+    }
+    if (localYStep > PARAMS.CHAIN_SETTLE_LOCAL_Y_STEP_MAX) {
+      settle.mode = 'idle';
+      settle.reason = 'local Y moving';
+      return chainSettleDebugFields();
+    }
+
+    const span = Math.max(0.001, PARAMS.CHAIN_SETTLE_REST_DEV_FULL - PARAMS.CHAIN_SETTLE_REST_DEV_START);
+    const strength = smoothstep01((previousDev - PARAMS.CHAIN_SETTLE_REST_DEV_START) / span);
+    const baseRestBlend = effectiveSoftRestBlend(PARAMS.SOFT_REST_BLEND);
+    const settleRestBlend = effectiveSoftRestBlend(PARAMS.SOFT_REST_BLEND * PARAMS.CHAIN_SETTLE_REST_BLEND_MULT);
+    settle.mode = strength > 0 ? 'settling' : 'idle';
+    settle.reason = strength > 0 ? 'idle chain dev' : 'chain dev low';
+    settle.strength = strength;
+    settle.restBlend = Math.max(baseRestBlend, settleRestBlend * strength);
+    settle.freedomScale = THREE.MathUtils.lerp(
+      1,
+      THREE.MathUtils.clamp(PARAMS.CHAIN_SETTLE_FREEDOM_SCALE, 0, 1),
+      strength
+    );
+    settle.velocityDamping = THREE.MathUtils.clamp(PARAMS.CHAIN_SETTLE_VELOCITY_DAMPING * strength, 0, 1);
+    return chainSettleDebugFields();
+  }
+
   function updateMotionGuardFromChain(chainSimStatus, chainAudit, now) {
     if (!PARAMS.MOTION_GUARD_ENABLED) return motionGuardSnapshot(now);
 
@@ -3274,9 +3459,11 @@
   function motionGuardRecoveryFactors() {
     const snapshot = motionGuardSnapshot();
     const qualitySnapshot = poseQualitySnapshot();
+    const chainSettle = chainSettleRecoveryFactors();
+    const chainSettleActive = isChainSettleEnabled() && chainSettle.strength > 0;
     const qualityActive = isPoseQualityEnabled() &&
       (qualitySnapshot.mode === 'suspect' || qualitySnapshot.mode === 'bad' || qualitySnapshot.recoveryRemaining > 0);
-    if ((!PARAMS.MOTION_GUARD_ENABLED || snapshot.recoveryRemaining <= 0) && !qualityActive) {
+    if ((!PARAMS.MOTION_GUARD_ENABLED || snapshot.recoveryRemaining <= 0) && !qualityActive && !chainSettleActive) {
       return {
         strength: 0,
         restBlend: effectiveSoftRestBlend(PARAMS.SOFT_REST_BLEND),
@@ -3322,9 +3509,9 @@
     );
 
     return {
-      strength: Math.max(strength, qualityStrength),
-      restBlend: Math.max(guardRestBlend, qualityRestBlend),
-      freedomScale: Math.min(guardFreedomScale, qualityFreedomScale),
+      strength: Math.max(strength, qualityStrength, chainSettle.strength),
+      restBlend: Math.max(guardRestBlend, qualityRestBlend, chainSettle.restBlend),
+      freedomScale: Math.min(guardFreedomScale, qualityFreedomScale, chainSettle.freedomScale),
     };
   }
 
@@ -4172,6 +4359,10 @@
     setText('debugDerivedRawX', formatDebugNumber(motion.derivedFilterRawX, 2));
     setText('debugDerivedX', formatDebugNumber(motion.derivedFilterX, 2));
     setText('debugDerivedFilterReset', motion.derivedFilterResetReason || '-');
+    setText('debugChainSettle', motion.chainSettleMode || (motion.chainSettleEnabled ? 'idle' : 'off'));
+    setText('debugChainSettleReason', motion.chainSettleReason || '-');
+    setText('debugChainSettleStrength', formatDebugNumber(motion.chainSettleStrength, 3));
+    setText('debugChainSettlePrevDev', formatDebugNumber(motion.chainSettlePrevDev, 2));
     setText('debugUnsafeReason', motion.unsafeReason || '-');
     setText('debugChainTopY', formatDebugNumber(motion.chainTopScreenY, 3));
     setText('debugChainFrontY', formatDebugNumber(motion.chainFrontScreenY, 3));
@@ -4468,6 +4659,7 @@
     resetPoseJumpDamping();
     resetPoseQualityGate();
     resetDerivedFilter('tracking lost');
+    resetChainSettle('tracking lost');
     const poseJumpDebug = poseJumpDampingSnapshot();
     const poseQualityDebug = poseQualitySnapshot();
     const guardDebug = motionGuardSnapshot();
@@ -4510,7 +4702,7 @@
       poseQualityNeckWidthDelta: poseQualityDebug.neckWidthDelta,
       poseQualityTriggerCount: poseQualityDebug.triggerCount,
       unsafeReason: guardDebug.reason,
-    }, derivedFilterDebugFields(), computeChainAuditMetrics()));
+    }, derivedFilterDebugFields(), chainSettleDebugFields(), computeChainAuditMetrics()));
   }
 
   function resetYawYStabilizer(yaw, liveY) {
@@ -4650,6 +4842,7 @@
       resetPoseJumpDamping(liveY, pitch, yaw, null);
       resetPoseQualityGate(liveY, null, now);
       resetDerivedFilter('tracking init');
+      resetChainSettle('tracking init');
       const poseJumpDebug = poseJumpDampingSnapshot(now);
       const poseQualityDebug = poseQualitySnapshot(now);
       const guardDebug = motionGuardSnapshot(now);
@@ -4694,7 +4887,7 @@
         poseQualityNeckWidthDelta: poseQualityDebug.neckWidthDelta,
         poseQualityTriggerCount: poseQualityDebug.triggerCount,
         unsafeReason: guardDebug.reason,
-      }, derivedFilterDebugFields(), computeChainAuditMetrics()));
+      }, derivedFilterDebugFields(), chainSettleDebugFields(), computeChainAuditMetrics()));
       return;
     }
 
@@ -4763,6 +4956,10 @@
       dampSoftChainVelocity(effectiveSoftSpikeVelocityDamping());
     }
     updateMotionGuardFromPose(upwardJump, pitchStep, now, stalledFrame);
+    const chainSettleDebug = updateChainSettleState(appliedPose, yawMotion, poseQualityDebug, stalledFrame);
+    if (chainSettleDebug.chainSettleMode === 'settling' && chainSettleDebug.chainSettleVelocityDamping > 0) {
+      dampSoftChainVelocity(chainSettleDebug.chainSettleVelocityDamping);
+    }
     const chainSimStatus = simulateChain(dt, stalledFrame);
     const pendantPose = updateDerivedPendantFilter({ yaw: yaw, pitch: pitch, roll: roll }, dt, poseQualityDebug, stalledFrame);
     updatePendantPendulum(dt, pendantPose.pitch, pendantPose.roll, pendantPose.yaw, stalledFrame);
@@ -4818,7 +5015,7 @@
       poseQualityNeckWidthDelta: poseQualityDebug.neckWidthDelta,
       poseQualityTriggerCount: poseQualityDebug.triggerCount,
       unsafeReason: guardDebug.reason,
-    }, derivedFilterDebugFields(), chainAudit));
+    }, derivedFilterDebugFields(), chainSettleDebugFields(), chainAudit));
   }
 
   function setDebugDrawerOpen(isOpen) {

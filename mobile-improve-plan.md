@@ -285,7 +285,7 @@ Acceptance check:
 - `?chainSettle=off` restores Phase 5 behavior.
 - `node --check recreate-necklace.js` passes.
 
-Report: _Not started yet._
+Report: Phase 5b Soft Chain Idle Settling implemented and reviewed with safe-distance idle and slow-turn logs. In stable idle, pose quality stayed mostly good, raw Y/yaw motion was low, chain rest deviation stayed low, and chain-settle remained mostly idle because the chain was already near rest. In safe-distance slow-turn, chain screen movement remained controlled and chain-settle only entered settling briefly, so it did not freeze or lag the necklace. Phase 5b is accepted for safe-distance mobile behavior. The mobile default is now the current accepted setting: `calm` physics with mobile auto-enabled pose jump damping, pose quality, derived visual filtering, and chain settling; fallback remains available with `?physics=mobile`, `?physics=default`, `?poseQuality=off`, `?derivedFilter=off`, and `?chainSettle=off`. Desktop default behavior remains unchanged. Remaining visible jitter when the phone is too close or handheld motion is high is pose/framing drift, not soft-chain instability, so do not increase chain settling further.
 
 ## Phase 6. Face/Mouth Safety Guard
 

@@ -54,25 +54,25 @@ https://example-name.trycloudflare.com/
 Current recommended mobile test:
 
 ```text
-https://example-name.trycloudflare.com/?physics=calm&poseQuality=on
+https://example-name.trycloudflare.com/?physics=calm&poseQuality=on&derivedFilter=on
 ```
 
-Phase 4b idle test:
+Phase 5 idle test:
 
 ```text
-https://example-name.trycloudflare.com/?physics=calm&poseQuality=on
+https://example-name.trycloudflare.com/?physics=calm&poseQuality=on&derivedFilter=on
 ```
 
-Phase 4b distance-change comparison, quality on:
+Phase 5 distance-change comparison, derived filter on:
 
 ```text
-https://example-name.trycloudflare.com/?physics=calm&poseQuality=on
+https://example-name.trycloudflare.com/?physics=calm&poseQuality=on&derivedFilter=on
 ```
 
-Phase 4b distance-change comparison, quality off:
+Phase 5 distance-change comparison, derived filter off:
 
 ```text
-https://example-name.trycloudflare.com/?physics=calm&poseQuality=off
+https://example-name.trycloudflare.com/?physics=calm&poseQuality=on&derivedFilter=off
 ```
 
 Old camera fallback:
@@ -90,7 +90,7 @@ https://example-name.trycloudflare.com/?cameraProfile=standardIdeal
 Full diagnostic comparison URL:
 
 ```text
-https://example-name.trycloudflare.com/?cameraProfile=standardIdeal&physics=calm&poseJumpDamping=on&poseQuality=on
+https://example-name.trycloudflare.com/?cameraProfile=standardIdeal&physics=calm&poseJumpDamping=on&poseQuality=on&derivedFilter=on
 ```
 
 ## Query Settings
@@ -128,10 +128,19 @@ Pose quality gate:
 ?poseQuality=off
 ```
 
+Derived visual filter:
+
+```text
+?derivedFilter=on
+?derivedFilter=off
+```
+
+On mobile, derived filter is on by default. On desktop, it stays off unless explicitly enabled.
+
 Combine settings with `&`:
 
 ```text
-https://example-name.trycloudflare.com/?physics=calm&poseQuality=on
+https://example-name.trycloudflare.com/?physics=calm&poseQuality=on&derivedFilter=on
 ```
 
 ## Debug Log Capture
@@ -146,9 +155,10 @@ https://example-name.trycloudflare.com/?physics=calm&poseQuality=on
 Suggested log names:
 
 ```text
-mobile-idle-forward-phase4b-calm.json
-mobile-distance-change-phase4b-calm.json
-mobile-distance-change-phase4b-off.json
+mobile-idle-forward-phase5-calm.json
+mobile-slow-turn-phase5-calm.json
+mobile-distance-change-phase5-calm.json
+mobile-distance-change-phase5-off.json
 ```
 
 Check these fields in the debug drawer:
@@ -157,6 +167,8 @@ Check these fields in the debug drawer:
 Physics Profile
 Pose Jump
 Pose Quality
+Derived Filter
+Derived Y
 Quality Counter Y
 Quality Triggers
 Chain Max Dev

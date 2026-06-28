@@ -221,30 +221,69 @@ Acceptance check:
 - Distance-change still shows some `suspect` activity and reduced `chainTopY`/`chainFrontY` range compared with Phase 2b.
 - `node --check recreate-necklace.js` passes.
 
-Report: _Not started yet._
+Report: Phase 4b tuning pass implemented and logs reviewed. Idle behavior improved compared with the first Phase 4 gate: pose quality is mostly good after warm-up, counter Y range is much smaller, and the large first-frame counter jump is gone. Remaining jitter appears to come from small frame-to-frame changes in derived visual channels such as pose Y, neck center X, pose-quality counter Y, and chain screen position, not from a single bad tracking state. Phase 5 should proceed as derived visual filtering, not as more pose-quality gating or placement calibration.
 
-## Phase 5. Derived Pose Filtering
+## Phase 5. Derived Visual Filtering Pass 1
 
 Goal:
-Smooth the visual channels that still react too strongly after landmark stabilization.
+Reduce remaining mobile jitter by filtering derived visual/local outputs only, while leaving raw tracking, solvePnP, camera, landmarks, chain geometry, and pendant placement unchanged.
 
 What to implement:
 
-- Add filtering for derived visual values rather than replacing the raw follower pose.
-- Filter neck center compensation, yaw/Y compensation, yaw used by chain fade/kick, and pitch/roll used by pendant physics.
-- Increase smoothing when pose quality is suspect and reset filters cleanly on tracking loss/regain.
+- Add URL fallback overrides: `?derivedFilter=on` and `?derivedFilter=off`.
+- Default to derived filter on for mobile/coarse-pointer runtimes and off for desktop unless explicitly enabled.
+- Filter final local Y compensation after yaw-Y, pose-jump, and pose-quality counter are combined.
+- Filter neck center X compensation.
+- Filter yaw/pitch/roll values used by pendant physics.
+- Use stronger smoothing when `poseQualityMode` is `suspect` or `bad`.
+- Reset filters on tracking loss, tracking regain/init, Reset Peaks, large frame stalls, or invalid filter state.
 
 Implementation hints:
 
-- Reuse the existing One Euro approach where practical, with separate tuning for position-like, rotation-like, and scale-like values.
 - Keep filter state small and explicit.
 - Apply filtering after diagnostics and pose-quality classification so it can adapt to frame quality.
+- If filter state is stale or invalid, use raw derived values for that frame and seed/reset the filter.
+- Do not filter the raw WebAR follower, solvePnP result, camera stream, landmarks, chain rest geometry, or pendant asset transform.
 
 Acceptance check:
 
 - Mobile jitter is reduced in chain and pendant motion without visible rubber-band lag.
 - Tracking loss/regain does not resume with stale filtered values.
 - Desktop remains close to the current accepted behavior.
+- `?derivedFilter=off` immediately restores pre-Phase-5 derived output behavior.
+- `node --check recreate-necklace.js` passes.
+
+Report: Phase 5 Derived Visual Filtering Pass 1 implemented and compared with `derivedFilter=off`. The filter is active in the latest logs and reduces local derived jitter: after warm-up, filtered local Y range/step is smaller than raw derived Y, and pendant yaw/pitch/roll input is also smoothed. However the visible idle jitter remains similar enough that Phase 5 is not the full fix. In `derivedFilter=on`, local compensation becomes small after stabilization, but `chainMaxRestDev` can still jump around `8+` and `chainFrontScreenY` can still move about `0.024` normalized. In `derivedFilter=off`, the local compensation is much noisier and chain screen ranges are larger, but both versions still visibly jitter. Current evidence points to soft-chain physics amplification/settling as the remaining issue, not more raw tracker filtering, solvePnP changes, placement calibration, or stronger pose-quality gating.
+
+## Phase 5b. Soft Chain Idle Settling
+
+Goal:
+Reduce remaining mobile idle jitter caused by soft-chain node motion while preserving the accepted tracker, placement, chain geometry, and pendant behavior.
+
+What to implement:
+
+- Keep this mobile/calm-scoped and chain-physics-only.
+- Add URL fallback overrides: `?chainSettle=on` and `?chainSettle=off`.
+- Default to chain settling on only for mobile/coarse-pointer runtimes using `physics=calm`; keep desktop unchanged unless explicitly enabled.
+- Detect idle-settling conditions from existing signals only: `poseQualityMode=good`, small derived/local motion, small raw Y/yaw steps, tracking detected, no frame stall, and chain rest deviation still elevated.
+- During idle-settling, increase existing soft-chain damping/rest blend slightly and reduce freedom only through a multiplier layer.
+- Optionally damp soft-chain velocity when rest deviation spikes while pose input remains small.
+- Do not change raw WebAR tracking, solvePnP, follower setup, landmarks, chain rest geometry, necklace placement, pendant placement/assets, material/link style, or safety guard behavior.
+
+Implementation hints:
+
+- Reuse `motionGuardRecoveryFactors()` or a nearby effective-factor path rather than rewriting the Verlet simulation.
+- Keep thresholds conservative so slow yaw and intentional movement stay responsive.
+- Treat this as settling the soft-chain back toward its current rest shape, not moving the necklace higher/lower.
+- Export debug fields for mode/reason/strength and include selected params in debug JSON.
+
+Acceptance check:
+
+- Idle forward with `?physics=calm&poseQuality=on&derivedFilter=on&chainSettle=on` has lower `chainMaxRestDev`, `chainFrontRestDev`, `chainTopScreenY` step, and `chainFrontScreenY` step than `chainSettle=off`.
+- Chain still follows slow turns without feeling frozen.
+- Pendant remains attached and centered.
+- `?chainSettle=off` restores Phase 5 behavior.
+- `node --check recreate-necklace.js` passes.
 
 Report: _Not started yet._
 

@@ -188,6 +188,16 @@
     POSE_QUALITY_REST_BLEND_MULT: 4.0,
     POSE_QUALITY_REST_BLEND_MIN: 0.055,
     POSE_QUALITY_FREEDOM_SCALE: 0.4,
+    // Phase 5 mobile-only derived visual filtering. This filters local outputs, not raw tracking.
+    DERIVED_FILTER_ENABLED: true,
+    DERIVED_FILTER_GOOD_BLEND: 0.34,
+    DERIVED_FILTER_SUSPECT_BLEND: 0.18,
+    DERIVED_FILTER_BAD_BLEND: 0.1,
+    DERIVED_FILTER_MAX_STEP_X: 0.7,
+    DERIVED_FILTER_MAX_STEP_Y: 1.4,
+    DERIVED_FILTER_ROT_GOOD_BLEND: 0.34,
+    DERIVED_FILTER_ROT_SUSPECT_BLEND: 0.18,
+    DERIVED_FILTER_ROT_BAD_BLEND: 0.1,
     CHAIN_GAP: 1.0,
     // Geometry-only chain shaping. These keep the front point centered while making side arcs less inward.
     CHAIN_WIDTH_SCALE: 1.11,
@@ -521,6 +531,27 @@
       neckWidthDelta: 0,
       triggerCount: 0,
     },
+    derivedFilter: {
+      ready: false,
+      enabled: false,
+      mode: 'off',
+      reason: '-',
+      resetReason: 'init',
+      blend: 1,
+      rotBlend: 1,
+      rawLocalX: 0,
+      localX: 0,
+      rawLocalY: 0,
+      localY: 0,
+      rawLocalPitch: 0,
+      localPitch: 0,
+      rawPendantYaw: null,
+      pendantYaw: null,
+      rawPendantPitch: null,
+      pendantPitch: null,
+      rawPendantRoll: null,
+      pendantRoll: null,
+    },
     neckCenter: {
       ready: false,
       confidence: 1,
@@ -592,6 +623,24 @@
       poseQualityNeckWidthRest: null,
       poseQualityNeckWidthDelta: 0,
       poseQualityTriggerCount: 0,
+      derivedFilterEnabled: false,
+      derivedFilterMode: 'off',
+      derivedFilterReason: '-',
+      derivedFilterResetReason: 'init',
+      derivedFilterBlend: 1,
+      derivedFilterRotBlend: 1,
+      derivedFilterRawX: 0,
+      derivedFilterX: 0,
+      derivedFilterRawY: 0,
+      derivedFilterY: 0,
+      derivedFilterRawPitch: 0,
+      derivedFilterPitch: 0,
+      derivedFilterRawPendantYaw: null,
+      derivedFilterPendantYaw: null,
+      derivedFilterRawPendantPitch: null,
+      derivedFilterPendantPitch: null,
+      derivedFilterRawPendantRoll: null,
+      derivedFilterPendantRoll: null,
       unsafeReason: '-',
       chainPointCount: null,
       chainTopScreenY: null,
@@ -924,6 +973,25 @@
     return isLikelyMobileRuntime();
   }
 
+  function getDerivedFilterOverride() {
+    try {
+      const params = new URLSearchParams(window.location.search || '');
+      const value = (params.get('derivedFilter') || '').toLowerCase();
+      if (value === 'on' || value === '1' || value === 'true') return true;
+      if (value === 'off' || value === '0' || value === 'false') return false;
+    } catch (e) {
+      // Keep automatic runtime selection.
+    }
+    return null;
+  }
+
+  function isDerivedFilterEnabled() {
+    if (!PARAMS.DERIVED_FILTER_ENABLED) return false;
+    const override = getDerivedFilterOverride();
+    if (override !== null) return override;
+    return isLikelyMobileRuntime();
+  }
+
   function getEffectivePhysicsDebug() {
     const profile = getPhysicsProfile();
     return {
@@ -940,6 +1008,7 @@
       pendantYawKick: effectivePendantYawKick(),
       poseJumpDampingEnabled: isPoseJumpDampingEnabled(),
       poseQualityEnabled: isPoseQualityEnabled(),
+      derivedFilterEnabled: isDerivedFilterEnabled(),
     };
   }
 
@@ -993,6 +1062,15 @@
       POSE_QUALITY_WARMUP_SEC: PARAMS.POSE_QUALITY_WARMUP_SEC,
       POSE_QUALITY_MAX_COUNTER_Y: PARAMS.POSE_QUALITY_MAX_COUNTER_Y,
       POSE_QUALITY_COUNTER_RATE: PARAMS.POSE_QUALITY_COUNTER_RATE,
+      DERIVED_FILTER_ENABLED: PARAMS.DERIVED_FILTER_ENABLED,
+      DERIVED_FILTER_GOOD_BLEND: PARAMS.DERIVED_FILTER_GOOD_BLEND,
+      DERIVED_FILTER_SUSPECT_BLEND: PARAMS.DERIVED_FILTER_SUSPECT_BLEND,
+      DERIVED_FILTER_BAD_BLEND: PARAMS.DERIVED_FILTER_BAD_BLEND,
+      DERIVED_FILTER_MAX_STEP_X: PARAMS.DERIVED_FILTER_MAX_STEP_X,
+      DERIVED_FILTER_MAX_STEP_Y: PARAMS.DERIVED_FILTER_MAX_STEP_Y,
+      DERIVED_FILTER_ROT_GOOD_BLEND: PARAMS.DERIVED_FILTER_ROT_GOOD_BLEND,
+      DERIVED_FILTER_ROT_SUSPECT_BLEND: PARAMS.DERIVED_FILTER_ROT_SUSPECT_BLEND,
+      DERIVED_FILTER_ROT_BAD_BLEND: PARAMS.DERIVED_FILTER_ROT_BAD_BLEND,
       PENDANT_MODE: PARAMS.PENDANT_MODE,
       PHYS_ENABLED: PARAMS.PHYS_ENABLED,
       PHYS_DAMPING: PARAMS.PHYS_DAMPING,
@@ -1386,6 +1464,8 @@
         STATE.motionDebug.poseQualityNeckWidthRest
       )
     );
+    resetDerivedFilter('reset peaks');
+    Object.assign(STATE.motionDebug, derivedFilterDebugFields());
     resetDebugSamples();
     updateDebugStats();
   }
@@ -2937,6 +3017,248 @@
     return poseQualitySnapshot(t);
   }
 
+  function resetDerivedFilter(reason) {
+    const filter = STATE.derivedFilter;
+    filter.ready = false;
+    filter.enabled = isDerivedFilterEnabled();
+    filter.mode = filter.enabled ? 'reset' : 'off';
+    filter.reason = reason || '-';
+    filter.resetReason = reason || '-';
+    filter.blend = 1;
+    filter.rotBlend = 1;
+    filter.rawLocalX = 0;
+    filter.localX = 0;
+    filter.rawLocalY = 0;
+    filter.localY = 0;
+    filter.rawLocalPitch = 0;
+    filter.localPitch = 0;
+    filter.rawPendantYaw = null;
+    filter.pendantYaw = null;
+    filter.rawPendantPitch = null;
+    filter.pendantPitch = null;
+    filter.rawPendantRoll = null;
+    filter.pendantRoll = null;
+  }
+
+  function derivedFilterDebugFields() {
+    const filter = STATE.derivedFilter;
+    return {
+      derivedFilterEnabled: isDerivedFilterEnabled(),
+      derivedFilterMode: filter.mode,
+      derivedFilterReason: filter.reason,
+      derivedFilterResetReason: filter.resetReason,
+      derivedFilterBlend: filter.blend,
+      derivedFilterRotBlend: filter.rotBlend,
+      derivedFilterRawX: filter.rawLocalX,
+      derivedFilterX: filter.localX,
+      derivedFilterRawY: filter.rawLocalY,
+      derivedFilterY: filter.localY,
+      derivedFilterRawPitch: filter.rawLocalPitch,
+      derivedFilterPitch: filter.localPitch,
+      derivedFilterRawPendantYaw: filter.rawPendantYaw,
+      derivedFilterPendantYaw: filter.pendantYaw,
+      derivedFilterRawPendantPitch: filter.rawPendantPitch,
+      derivedFilterPendantPitch: filter.pendantPitch,
+      derivedFilterRawPendantRoll: filter.rawPendantRoll,
+      derivedFilterPendantRoll: filter.pendantRoll,
+    };
+  }
+
+  function derivedFilterFrameScale(dt) {
+    const safeDt = Number.isFinite(dt) && dt > 0 ? dt : 1 / 60;
+    return THREE.MathUtils.clamp(safeDt * 60, 0.25, 2.4);
+  }
+
+  function derivedFilterBlendForMode(mode, rotation) {
+    if (mode === 'bad') {
+      return rotation ? PARAMS.DERIVED_FILTER_ROT_BAD_BLEND : PARAMS.DERIVED_FILTER_BAD_BLEND;
+    }
+    if (mode === 'suspect') {
+      return rotation ? PARAMS.DERIVED_FILTER_ROT_SUSPECT_BLEND : PARAMS.DERIVED_FILTER_SUSPECT_BLEND;
+    }
+    return rotation ? PARAMS.DERIVED_FILTER_ROT_GOOD_BLEND : PARAMS.DERIVED_FILTER_GOOD_BLEND;
+  }
+
+  function derivedFilterAlpha(mode, dt, rotation) {
+    const baseBlend = THREE.MathUtils.clamp(derivedFilterBlendForMode(mode, rotation), 0, 1);
+    return 1 - Math.pow(1 - baseBlend, derivedFilterFrameScale(dt));
+  }
+
+  function stepDerivedFilterValue(current, target, alpha, maxStep, dt) {
+    const next = current + (target - current) * alpha;
+    const step = Math.max(0.01, maxStep) * derivedFilterFrameScale(dt);
+    return current + THREE.MathUtils.clamp(next - current, -step, step);
+  }
+
+  function derivedFilterModeFromQuality(poseQualitySnapshotValue) {
+    const qualityMode = poseQualitySnapshotValue && poseQualitySnapshotValue.mode;
+    if (qualityMode === 'bad' || qualityMode === 'suspect' || qualityMode === 'warmup') return qualityMode;
+    return 'good';
+  }
+
+  function seedDerivedLocalFilter(raw, mode, reason) {
+    const filter = STATE.derivedFilter;
+    filter.ready = true;
+    filter.mode = mode;
+    filter.reason = reason || '-';
+    filter.rawLocalX = raw.x;
+    filter.localX = raw.x;
+    filter.rawLocalY = raw.y;
+    filter.localY = raw.y;
+    filter.rawLocalPitch = raw.pitch;
+    filter.localPitch = raw.pitch;
+    filter.blend = 1;
+    filter.rotBlend = 1;
+    return {
+      x: raw.x,
+      y: raw.y,
+      pitch: raw.pitch,
+      rawX: raw.x,
+      rawY: raw.y,
+      rawPitch: raw.pitch,
+    };
+  }
+
+  function updateDerivedVisualFilter(raw, dt, poseQualitySnapshotValue, stalledFrame) {
+    const filter = STATE.derivedFilter;
+    const enabled = isDerivedFilterEnabled();
+    const validRaw = raw &&
+      Number.isFinite(raw.x) &&
+      Number.isFinite(raw.y) &&
+      Number.isFinite(raw.pitch);
+    filter.enabled = enabled;
+
+    if (!enabled) {
+      filter.mode = 'off';
+      filter.reason = 'disabled';
+      filter.blend = 1;
+      filter.rotBlend = 1;
+      if (validRaw) {
+        filter.rawLocalX = raw.x;
+        filter.localX = raw.x;
+        filter.rawLocalY = raw.y;
+        filter.localY = raw.y;
+        filter.rawLocalPitch = raw.pitch;
+        filter.localPitch = raw.pitch;
+      }
+      return {
+        x: validRaw ? raw.x : 0,
+        y: validRaw ? raw.y : 0,
+        pitch: validRaw ? raw.pitch : 0,
+        rawX: validRaw ? raw.x : 0,
+        rawY: validRaw ? raw.y : 0,
+        rawPitch: validRaw ? raw.pitch : 0,
+      };
+    }
+
+    if (!validRaw) {
+      resetDerivedFilter('invalid derived local');
+      return { x: 0, y: 0, pitch: 0, rawX: 0, rawY: 0, rawPitch: 0 };
+    }
+
+    const qualityMode = derivedFilterModeFromQuality(poseQualitySnapshotValue);
+    if (stalledFrame) {
+      resetDerivedFilter('frame stall');
+      return seedDerivedLocalFilter(raw, 'reset', 'frame stall');
+    }
+    if (qualityMode === 'warmup') {
+      return seedDerivedLocalFilter(raw, 'warmup', 'quality warmup');
+    }
+    if (!filter.ready) {
+      return seedDerivedLocalFilter(raw, 'seed', filter.resetReason || 'seed');
+    }
+
+    const alpha = derivedFilterAlpha(qualityMode, dt, false);
+    const rotAlpha = derivedFilterAlpha(qualityMode, dt, true);
+    filter.mode = qualityMode;
+    filter.reason = poseQualitySnapshotValue && poseQualitySnapshotValue.reason
+      ? poseQualitySnapshotValue.reason
+      : '-';
+    filter.blend = alpha;
+    filter.rotBlend = rotAlpha;
+    filter.rawLocalX = raw.x;
+    filter.rawLocalY = raw.y;
+    filter.rawLocalPitch = raw.pitch;
+    filter.localX = stepDerivedFilterValue(
+      filter.localX,
+      raw.x,
+      alpha,
+      PARAMS.DERIVED_FILTER_MAX_STEP_X,
+      dt
+    );
+    filter.localY = stepDerivedFilterValue(
+      filter.localY,
+      raw.y,
+      alpha,
+      PARAMS.DERIVED_FILTER_MAX_STEP_Y,
+      dt
+    );
+    filter.localPitch += (raw.pitch - filter.localPitch) * rotAlpha;
+
+    return {
+      x: filter.localX,
+      y: filter.localY,
+      pitch: filter.localPitch,
+      rawX: raw.x,
+      rawY: raw.y,
+      rawPitch: raw.pitch,
+    };
+  }
+
+  function updateDerivedPendantFilter(raw, dt, poseQualitySnapshotValue, stalledFrame) {
+    const filter = STATE.derivedFilter;
+    const enabled = isDerivedFilterEnabled();
+    const validRaw = raw &&
+      Number.isFinite(raw.yaw) &&
+      Number.isFinite(raw.pitch) &&
+      Number.isFinite(raw.roll);
+    filter.enabled = enabled;
+
+    if (!enabled || !validRaw) {
+      if (validRaw) {
+        filter.rawPendantYaw = raw.yaw;
+        filter.pendantYaw = raw.yaw;
+        filter.rawPendantPitch = raw.pitch;
+        filter.pendantPitch = raw.pitch;
+        filter.rawPendantRoll = raw.roll;
+        filter.pendantRoll = raw.roll;
+      }
+      return validRaw ? raw : { yaw: 0, pitch: 0, roll: 0 };
+    }
+
+    const qualityMode = derivedFilterModeFromQuality(poseQualitySnapshotValue);
+    if (
+      stalledFrame ||
+      qualityMode === 'warmup' ||
+      !Number.isFinite(filter.pendantYaw) ||
+      !Number.isFinite(filter.pendantPitch) ||
+      !Number.isFinite(filter.pendantRoll)
+    ) {
+      filter.rawPendantYaw = raw.yaw;
+      filter.pendantYaw = raw.yaw;
+      filter.rawPendantPitch = raw.pitch;
+      filter.pendantPitch = raw.pitch;
+      filter.rawPendantRoll = raw.roll;
+      filter.pendantRoll = raw.roll;
+      filter.rotBlend = 1;
+      return raw;
+    }
+
+    const rotAlpha = derivedFilterAlpha(qualityMode, dt, true);
+    filter.rotBlend = rotAlpha;
+    filter.rawPendantYaw = raw.yaw;
+    filter.rawPendantPitch = raw.pitch;
+    filter.rawPendantRoll = raw.roll;
+    filter.pendantYaw += angleDelta(raw.yaw, filter.pendantYaw) * rotAlpha;
+    filter.pendantPitch += (raw.pitch - filter.pendantPitch) * rotAlpha;
+    filter.pendantRoll += (raw.roll - filter.pendantRoll) * rotAlpha;
+    return {
+      yaw: filter.pendantYaw,
+      pitch: filter.pendantPitch,
+      roll: filter.pendantRoll,
+    };
+  }
+
   function updateMotionGuardFromChain(chainSimStatus, chainAudit, now) {
     if (!PARAMS.MOTION_GUARD_ENABLED) return motionGuardSnapshot(now);
 
@@ -3842,6 +4164,14 @@
     setText('debugPoseQualityNeckWidthRest', formatDebugNumber(motion.poseQualityNeckWidthRest, 1));
     setText('debugPoseQualityNeckWidthDelta', formatDebugNumber(motion.poseQualityNeckWidthDelta, 1));
     setText('debugPoseQualityTriggers', Number.isFinite(motion.poseQualityTriggerCount) ? String(motion.poseQualityTriggerCount) : '0');
+    setText('debugDerivedFilter', motion.derivedFilterMode || (motion.derivedFilterEnabled ? 'on' : 'off'));
+    setText('debugDerivedFilterReason', motion.derivedFilterReason || '-');
+    setText('debugDerivedFilterBlend', formatDebugNumber(motion.derivedFilterBlend, 3));
+    setText('debugDerivedRawY', formatDebugNumber(motion.derivedFilterRawY, 2));
+    setText('debugDerivedY', formatDebugNumber(motion.derivedFilterY, 2));
+    setText('debugDerivedRawX', formatDebugNumber(motion.derivedFilterRawX, 2));
+    setText('debugDerivedX', formatDebugNumber(motion.derivedFilterX, 2));
+    setText('debugDerivedFilterReset', motion.derivedFilterResetReason || '-');
     setText('debugUnsafeReason', motion.unsafeReason || '-');
     setText('debugChainTopY', formatDebugNumber(motion.chainTopScreenY, 3));
     setText('debugChainFrontY', formatDebugNumber(motion.chainFrontScreenY, 3));
@@ -4137,6 +4467,7 @@
     resetMotionGuard();
     resetPoseJumpDamping();
     resetPoseQualityGate();
+    resetDerivedFilter('tracking lost');
     const poseJumpDebug = poseJumpDampingSnapshot();
     const poseQualityDebug = poseQualitySnapshot();
     const guardDebug = motionGuardSnapshot();
@@ -4179,7 +4510,7 @@
       poseQualityNeckWidthDelta: poseQualityDebug.neckWidthDelta,
       poseQualityTriggerCount: poseQualityDebug.triggerCount,
       unsafeReason: guardDebug.reason,
-    }, computeChainAuditMetrics()));
+    }, derivedFilterDebugFields(), computeChainAuditMetrics()));
   }
 
   function resetYawYStabilizer(yaw, liveY) {
@@ -4234,7 +4565,7 @@
     return result;
   }
 
-  function applyTrackingPoseMode(upwardJump, poseJumpSnapshot, poseQualitySnapshotValue) {
+  function applyTrackingPoseMode(upwardJump, poseJumpSnapshot, poseQualitySnapshotValue, dt, stalledFrame) {
     const applied = { x: 0, y: 0, pitch: 0 };
     if (!REFS.necklaceGroup) return applied;
 
@@ -4262,10 +4593,11 @@
     applied.y += yawY;
     applied.y += poseJump.offsetY;
     applied.y += poseQuality.counterY || 0;
-    REFS.necklaceGroup.position.x = applied.x;
-    REFS.necklaceGroup.position.y = applied.y;
-    REFS.necklaceGroup.rotation.x = applied.pitch;
-    return applied;
+    const filtered = updateDerivedVisualFilter(applied, dt, poseQuality, stalledFrame);
+    REFS.necklaceGroup.position.x = filtered.x;
+    REFS.necklaceGroup.position.y = filtered.y;
+    REFS.necklaceGroup.rotation.x = filtered.pitch;
+    return filtered;
   }
 
   function updateNecklaceMotionStabilizer(state, hookOrder, landmarks) {
@@ -4317,6 +4649,7 @@
       resetMotionGuard();
       resetPoseJumpDamping(liveY, pitch, yaw, null);
       resetPoseQualityGate(liveY, null, now);
+      resetDerivedFilter('tracking init');
       const poseJumpDebug = poseJumpDampingSnapshot(now);
       const poseQualityDebug = poseQualitySnapshot(now);
       const guardDebug = motionGuardSnapshot(now);
@@ -4361,7 +4694,7 @@
         poseQualityNeckWidthDelta: poseQualityDebug.neckWidthDelta,
         poseQualityTriggerCount: poseQualityDebug.triggerCount,
         unsafeReason: guardDebug.reason,
-      }, computeChainAuditMetrics()));
+      }, derivedFilterDebugFields(), computeChainAuditMetrics()));
       return;
     }
 
@@ -4425,13 +4758,14 @@
       signedSmoothYDelta,
       now
     );
-    const appliedPose = applyTrackingPoseMode(upwardJump, poseJumpDebug, poseQualityDebug);
+    const appliedPose = applyTrackingPoseMode(upwardJump, poseJumpDebug, poseQualityDebug, dt, stalledFrame);
     if (upwardJump > PARAMS.SOFT_SPIKE_Y_THRESHOLD) {
       dampSoftChainVelocity(effectiveSoftSpikeVelocityDamping());
     }
     updateMotionGuardFromPose(upwardJump, pitchStep, now, stalledFrame);
     const chainSimStatus = simulateChain(dt, stalledFrame);
-    updatePendantPendulum(dt, pitch, roll, yaw, stalledFrame);
+    const pendantPose = updateDerivedPendantFilter({ yaw: yaw, pitch: pitch, roll: roll }, dt, poseQualityDebug, stalledFrame);
+    updatePendantPendulum(dt, pendantPose.pitch, pendantPose.roll, pendantPose.yaw, stalledFrame);
     const chainAudit = computeChainAuditMetrics();
     const guardDebug = updateMotionGuardFromChain(chainSimStatus, chainAudit, now);
     STATE.posePrevPitch = pitch;
@@ -4484,7 +4818,7 @@
       poseQualityNeckWidthDelta: poseQualityDebug.neckWidthDelta,
       poseQualityTriggerCount: poseQualityDebug.triggerCount,
       unsafeReason: guardDebug.reason,
-    }, chainAudit));
+    }, derivedFilterDebugFields(), chainAudit));
   }
 
   function setDebugDrawerOpen(isOpen) {

@@ -28,7 +28,7 @@
     <script src="helpers/landmarksStabilizers/OneEuroLMStabilizer.js"></script>
 
     <!-- Our clean rebuild entry point. Phase 6 adds custom pendant product plane. -->
-    <script src="recreate-necklace.js"></script>
+    <script src="recreate-necklace.js?v=phase5-1"></script>
 
     <style>
       :root {
@@ -651,6 +651,38 @@
         <div class="debug-stat">
           <span class="debug-stat__label">Quality Triggers</span>
           <span class="debug-stat__value" id="debugPoseQualityTriggers">0</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Derived Filter</span>
+          <span class="debug-stat__value" id="debugDerivedFilter">Off</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Derived Reason</span>
+          <span class="debug-stat__value" id="debugDerivedFilterReason">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Derived Blend</span>
+          <span class="debug-stat__value" id="debugDerivedFilterBlend">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Derived Raw Y</span>
+          <span class="debug-stat__value" id="debugDerivedRawY">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Derived Y</span>
+          <span class="debug-stat__value" id="debugDerivedY">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Derived Raw X</span>
+          <span class="debug-stat__value" id="debugDerivedRawX">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Derived X</span>
+          <span class="debug-stat__value" id="debugDerivedX">-</span>
+        </div>
+        <div class="debug-stat">
+          <span class="debug-stat__label">Derived Reset</span>
+          <span class="debug-stat__value" id="debugDerivedFilterReset">-</span>
         </div>
         <div class="debug-stat">
           <span class="debug-stat__label">Unsafe Reason</span>

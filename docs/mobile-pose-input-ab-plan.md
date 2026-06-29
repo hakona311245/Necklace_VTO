@@ -11,9 +11,7 @@ The current suspect log is `mobile-log/29junlog.json`, captured on iPhone Safari
 - pose jump damping enabled
 - pose quality enabled
 - derived filter enabled
-- chain settle enabled
-
-The camera/layout data looks consistent:
+- chain settle enabled                                
 
 - camera/source: `600x800`, aspect `0.75`
 - layout CSS: `414x552`, aspect `0.75`
@@ -148,6 +146,16 @@ Suggested debug drawer rows:
 - `Back Offset`
 - `Center Conf`
 - `Comp X`
+
+Implementation status:
+
+Phase 2 diagnostics implemented. `computeLandmarkBiasMetrics()` now exports `opposingBias`, `opposingBiasPx`, `opposingBiasNorm`, `opposingBiasStrength`, and `opposingBiasDirection` using diagnostics-only thresholds. `motionDebug` now mirrors the effective `pnpProfile`, center/back offsets, normalized offsets, opposing-bias state, opposing-bias strength/direction, and whether `neckCenterCompX` is saturated. The debug drawer shows `PnP Profile`, `Opposing Bias`, `Center Offset`, `Back Offset`, and `Comp X Sat`. This phase does not change solvePnP labels, neck-center compensation, tracking, smoothing, chain physics, pendant behavior, or defaults.
+
+Report:
+
+Phase 2 diagnostics confirmed the same opposing-bias pattern on desktop in `mobile-log/desktop/desktop29jun.json`. Desktop used a landscape `800x600` source and desktop `default` physics, but still showed opposing bias in about `94%` of samples, with `centerOffsetPx` around `+33px`, `backMidOffsetPx` around `-37px`, low `neckCenterConfidence`, saturated `neckCenterCompX`, and yaw biased to one side. This rules out mobile portrait canvas, mobile calm physics, chain settling, and handheld phone shake as the sole cause. The issue should now be treated as a shared pose-input / landmark-geometry conflict that mobile makes more visible. Keep `full` as the default because it remains more pose-stable than `noBack`, but continue with Phase 3 compensation toggles to determine whether `neckCenterCompX` is helping or worsening the sideways drift. Any future default/fallback changes must protect both desktop and mobile behavior.
+
+Planning note: desktop also reproduces opposing bias, so the investigation is no longer mobile-only, while any fallback/default changes still must protect desktop behavior.
 
 ## 4. Phase 3: Add Compensation Toggles
 

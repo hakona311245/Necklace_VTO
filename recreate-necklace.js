@@ -123,6 +123,13 @@
     NECK_CENTER_VISUAL_X_MAX_COMP: 1.5,
     NECK_CENTER_VISUAL_X_SMOOTHING: 0.16,
     NECK_CENTER_VISUAL_X_SIGN: 1,
+    // Diagnostics-only pose-input bias thresholds. These do not change tracking behavior.
+    POSE_INPUT_OPPOSING_CENTER_PX: 8,
+    POSE_INPUT_OPPOSING_BACK_PX: 8,
+    POSE_INPUT_OPPOSING_CENTER_NORM: 0.06,
+    POSE_INPUT_OPPOSING_BACK_NORM: 0.06,
+    POSE_INPUT_LOW_CENTER_CONFIDENCE: 0.25,
+    POSE_INPUT_COMP_SATURATION_FRAC: 0.85,
     MOTION_LOG_INTERVAL: 0.35,
     PEAK_WINDOW_SEC: 2,
     SOFT_ENABLED: true,
@@ -643,6 +650,15 @@
       yawStep: null,
       rawYDelta: null,
       yawYCompensation: null,
+      pnpProfile: DEFAULT_PNP_PROFILE,
+      poseInputOpposingBias: false,
+      poseInputOpposingBiasStrength: 0,
+      poseInputOpposingBiasDirection: 'none',
+      poseInputCenterOffsetPx: null,
+      poseInputBackMidOffsetPx: null,
+      poseInputCenterOffsetNorm: null,
+      poseInputBackOffsetNorm: null,
+      poseInputCompXSaturated: false,
       neckCenterConfidence: 1,
       neckCenterBlendToSide: 0,
       neckCenterCompX: 0,
@@ -858,6 +874,11 @@
 
   function formatDebugNumber(value, digits) {
     return Number.isFinite(value) ? value.toFixed(digits || 3) : '-';
+  }
+
+  function formatDebugOffsetPxNorm(px, norm) {
+    if (!Number.isFinite(px) && !Number.isFinite(norm)) return '-';
+    return formatDebugNumber(px, 1) + 'px / ' + formatDebugNumber(norm, 3);
   }
 
   function formatDebugSize(width, height) {
@@ -1162,6 +1183,12 @@
       NECK_CENTER_GATE_ENABLED: PARAMS.NECK_CENTER_GATE_ENABLED,
       NECK_CENTER_TRUST_NORM: PARAMS.NECK_CENTER_TRUST_NORM,
       NECK_CENTER_REJECT_NORM: PARAMS.NECK_CENTER_REJECT_NORM,
+      POSE_INPUT_OPPOSING_CENTER_PX: PARAMS.POSE_INPUT_OPPOSING_CENTER_PX,
+      POSE_INPUT_OPPOSING_BACK_PX: PARAMS.POSE_INPUT_OPPOSING_BACK_PX,
+      POSE_INPUT_OPPOSING_CENTER_NORM: PARAMS.POSE_INPUT_OPPOSING_CENTER_NORM,
+      POSE_INPUT_OPPOSING_BACK_NORM: PARAMS.POSE_INPUT_OPPOSING_BACK_NORM,
+      POSE_INPUT_LOW_CENTER_CONFIDENCE: PARAMS.POSE_INPUT_LOW_CENTER_CONFIDENCE,
+      POSE_INPUT_COMP_SATURATION_FRAC: PARAMS.POSE_INPUT_COMP_SATURATION_FRAC,
       SOFT_ENABLED: PARAMS.SOFT_ENABLED,
       SOFT_DAMPING: PARAMS.SOFT_DAMPING,
       SOFT_MOTION_DEADZONE: PARAMS.SOFT_MOTION_DEADZONE,
@@ -4227,6 +4254,26 @@
       ? backMidOffsetPx / neckWidthPx
       : null;
     const backSlopePx = hasBack ? backDown.x - backUp.x : null;
+    const hasOpposingSigns = Number.isFinite(centerOffsetPx) &&
+      Number.isFinite(backMidOffsetPx) &&
+      centerOffsetPx !== 0 &&
+      backMidOffsetPx !== 0 &&
+      Math.sign(centerOffsetPx) !== Math.sign(backMidOffsetPx);
+    const opposingBiasPx = hasOpposingSigns &&
+      Math.abs(centerOffsetPx) >= PARAMS.POSE_INPUT_OPPOSING_CENTER_PX &&
+      Math.abs(backMidOffsetPx) >= PARAMS.POSE_INPUT_OPPOSING_BACK_PX;
+    const opposingBiasNorm = hasOpposingSigns &&
+      Number.isFinite(centerOffsetNorm) &&
+      Number.isFinite(backOffsetNorm) &&
+      Math.abs(centerOffsetNorm) >= PARAMS.POSE_INPUT_OPPOSING_CENTER_NORM &&
+      Math.abs(backOffsetNorm) >= PARAMS.POSE_INPUT_OPPOSING_BACK_NORM;
+    const opposingBias = Boolean(opposingBiasPx && opposingBiasNorm);
+    const opposingBiasStrength = opposingBias
+      ? Math.min(
+          Math.abs(centerOffsetNorm) / Math.max(0.001, PARAMS.POSE_INPUT_OPPOSING_CENTER_NORM),
+          Math.abs(backOffsetNorm) / Math.max(0.001, PARAMS.POSE_INPUT_OPPOSING_BACK_NORM)
+        )
+      : 0;
 
     return {
       centerOffsetPx: centerOffsetPx,
@@ -4247,6 +4294,13 @@
       backMidOffsetPx: backMidOffsetPx,
       backOffsetNorm: backOffsetNorm,
       backSlopePx: backSlopePx,
+      opposingBias: opposingBias,
+      opposingBiasPx: Boolean(opposingBiasPx),
+      opposingBiasNorm: Boolean(opposingBiasNorm),
+      opposingBiasStrength: opposingBiasStrength,
+      opposingBiasDirection: hasOpposingSigns
+        ? (centerOffsetPx > 0 ? 'center-preview-right_back-preview-left' : 'center-preview-left_back-preview-right')
+        : 'none',
       backUpX: backUp ? backUp.x : null,
       backDownX: backDown ? backDown.x : null,
       screenWidth: width,
@@ -4421,6 +4475,22 @@
     setText('debugTrackingMode', PARAMS.TRACKING_POSE_MODE || 'sourceRaw');
     setText('debugChainSim', motion.chainSim || 'none');
     setText('debugPhysicsProfile', getPhysicsProfileLabel());
+    setText('debugPnpProfile', getPnpProfileLabel(getPnpProfileName()));
+    setText(
+      'debugPoseInputOpposingBias',
+      motion.poseInputOpposingBias
+        ? 'Yes ' + formatDebugNumber(motion.poseInputOpposingBiasStrength, 2)
+        : 'No'
+    );
+    setText(
+      'debugPoseInputCenterOffset',
+      formatDebugOffsetPxNorm(motion.poseInputCenterOffsetPx, motion.poseInputCenterOffsetNorm)
+    );
+    setText(
+      'debugPoseInputBackOffset',
+      formatDebugOffsetPxNorm(motion.poseInputBackMidOffsetPx, motion.poseInputBackOffsetNorm)
+    );
+    setText('debugPoseInputCompXSat', motion.poseInputCompXSaturated ? 'Yes' : 'No');
     setText('debugMotionGuard', motion.motionGuardMode || 'stable');
     setText('debugRecoveryTime', formatDebugNumber(motion.motionGuardRecovery, 2));
     setText('debugPoseJump', motion.poseJumpMode || 'stable');
@@ -5062,6 +5132,10 @@
       groupY: REFS.necklaceGroup.position.y,
       chainRestDev: chainAudit.chainMaxRestDev,
     });
+    const neckCompMax = Math.max(0, PARAMS.NECK_CENTER_VISUAL_X_MAX_COMP);
+    const neckCompSaturation = THREE.MathUtils.clamp(PARAMS.POSE_INPUT_COMP_SATURATION_FRAC, 0, 1);
+    const neckCompXSaturated = neckCompMax > 0 &&
+      Math.abs(STATE.neckCenter.visualCompX) >= neckCompMax * neckCompSaturation;
     setMotionDebug(Object.assign({
       detected: true,
       followerY: followerY,
@@ -5072,6 +5146,15 @@
       yawStep: yawMotion.yawStep,
       rawYDelta: yawMotion.rawYDelta,
       yawYCompensation: yawMotion.yawYCompensation,
+      pnpProfile: getPnpProfileName(),
+      poseInputOpposingBias: Boolean(landmarkMetrics && landmarkMetrics.opposingBias),
+      poseInputOpposingBiasStrength: landmarkMetrics ? landmarkMetrics.opposingBiasStrength : 0,
+      poseInputOpposingBiasDirection: landmarkMetrics ? landmarkMetrics.opposingBiasDirection : 'none',
+      poseInputCenterOffsetPx: landmarkMetrics ? landmarkMetrics.centerOffsetPx : null,
+      poseInputBackMidOffsetPx: landmarkMetrics ? landmarkMetrics.backMidOffsetPx : null,
+      poseInputCenterOffsetNorm: landmarkMetrics ? landmarkMetrics.centerOffsetNorm : null,
+      poseInputBackOffsetNorm: landmarkMetrics ? landmarkMetrics.backOffsetNorm : null,
+      poseInputCompXSaturated: neckCompXSaturated,
       neckCenterConfidence: STATE.neckCenter.confidence,
       neckCenterBlendToSide: STATE.neckCenter.blendToSide,
       neckCenterCompX: STATE.neckCenter.visualCompX,

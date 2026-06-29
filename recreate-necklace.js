@@ -357,6 +357,12 @@
     'torsoNeckCenterDown',
     'torsoNeckBackDown',
   ];
+  const IMGPOINTS_NO_BACK = [
+    'torsoNeckCenterUp',
+    'torsoNeckLeftUp',
+    'torsoNeckRightUp',
+    'torsoNeckCenterDown',
+  ];
 
   const NN_LANDMARK_LABELS = [
     'torsoNeckCenterUp',
@@ -383,6 +389,27 @@
 
   const ACTIVE_NN_KEY = '9';
   const ACTIVE_IMGPOINTS = IMGPOINTS_6;
+  const DEFAULT_PNP_PROFILE = 'full';
+  const PNP_PROFILES = {
+    full: {
+      label: 'Full',
+      labels: IMGPOINTS_6,
+    },
+    noBack: {
+      label: 'No Back',
+      labels: IMGPOINTS_NO_BACK,
+    },
+    sideCenter: {
+      label: 'Side + Center',
+      labels: IMGPOINTS_NO_BACK,
+    },
+    // Current NN has no lower left/right side landmarks, so sideOnly safely aliases sideCenter for A/B.
+    sideOnly: {
+      label: 'Side Only (uses sideCenter)',
+      labels: IMGPOINTS_NO_BACK,
+      aliasOf: 'sideCenter',
+    },
+  };
 
   const FALLBACK_PRODUCTS = [
     {
@@ -476,6 +503,8 @@
     cameraProfile: DEFAULT_CAMERA_PROFILE,
     activeCameraProfile: null,
     physicsProfile: DEFAULT_PHYSICS_PROFILE,
+    requestedPnpProfile: DEFAULT_PNP_PROFILE,
+    pnpProfile: DEFAULT_PNP_PROFILE,
     sourceSize: null,
     lastDetection: null,
     debugReady: false,
@@ -903,6 +932,61 @@
       (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
   }
 
+  function getRequestedPnpProfile() {
+    try {
+      const params = new URLSearchParams(window.location.search || '');
+      const profile = params.get('pnpProfile');
+      if (profile && PNP_PROFILES[profile]) return profile;
+      if (profile) {
+        const lowerProfile = profile.toLowerCase();
+        const matched = Object.keys(PNP_PROFILES).find(function (key) {
+          return key.toLowerCase() === lowerProfile;
+        });
+        if (matched) return matched;
+      }
+    } catch (e) {
+      // Keep the default solvePnP profile.
+    }
+    return DEFAULT_PNP_PROFILE;
+  }
+
+  function getInitialPnpProfile(requestedProfile) {
+    const requested = PNP_PROFILES[requestedProfile] ? requestedProfile : DEFAULT_PNP_PROFILE;
+    if (!isLikelyMobileRuntime()) return DEFAULT_PNP_PROFILE;
+    return requested;
+  }
+
+  function getPnpProfileName() {
+    return PNP_PROFILES[STATE.pnpProfile] ? STATE.pnpProfile : DEFAULT_PNP_PROFILE;
+  }
+
+  function getPnpProfile() {
+    return PNP_PROFILES[getPnpProfileName()] || PNP_PROFILES[DEFAULT_PNP_PROFILE];
+  }
+
+  function getPnpProfileLabel(profileName) {
+    const profile = PNP_PROFILES[profileName] || PNP_PROFILES[DEFAULT_PNP_PROFILE];
+    return profile.label || profileName || DEFAULT_PNP_PROFILE;
+  }
+
+  function getActivePnpImgPoints() {
+    return getPnpProfile().labels || IMGPOINTS_6;
+  }
+
+  function getPnpProfileDebug() {
+    const active = getPnpProfileName();
+    const profile = getPnpProfile();
+    return {
+      requested: STATE.requestedPnpProfile,
+      active: active,
+      label: getPnpProfileLabel(active),
+      mobileOnly: true,
+      desktopIgnored: !isLikelyMobileRuntime() && STATE.requestedPnpProfile !== DEFAULT_PNP_PROFILE,
+      aliasOf: profile.aliasOf || null,
+      labels: getActivePnpImgPoints().slice(),
+    };
+  }
+
   function getInitialPhysicsProfile() {
     try {
       const params = new URLSearchParams(window.location.search || '');
@@ -1066,6 +1150,8 @@
     return {
       TAA_LEVEL: PARAMS.TAA_LEVEL,
       TRACKING_POSE_MODE: PARAMS.TRACKING_POSE_MODE,
+      PNP_PROFILE: getPnpProfileName(),
+      PNP_PROFILE_REQUESTED: STATE.requestedPnpProfile,
       ROT_PITCH: PARAMS.ROT_PITCH,
       ROT_YAW: PARAMS.ROT_YAW,
       ROT_ROLL: PARAMS.ROT_ROLL,
@@ -1234,6 +1320,7 @@
       cameraProfileLabel: getCameraProfileLabel(STATE.activeCameraProfile || STATE.cameraProfile),
       physicsProfile: getPhysicsProfileName(),
       physicsProfileLabel: getPhysicsProfileLabel(),
+      pnpProfile: getPnpProfileDebug(),
       effectivePhysics: getEffectivePhysicsDebug(),
       requestedVideoSettings: videoSettings(),
       cameraTrackSettings: getCameraTrackSettingsSnapshot(video),
@@ -1398,6 +1485,7 @@
         active: getPhysicsProfileName(),
         label: getPhysicsProfileLabel(),
       },
+      pnpProfile: getPnpProfileDebug(),
       runtime: cloneDebugValue(runtime),
       latest: {
         trackingStarted: STATE.trackingStarted,
@@ -5187,6 +5275,11 @@
       ASSET_BASE + nn.path,
       '(' + nn.points + ' points)'
     );
+    console.log(
+      '[recreate-shell] solvePnP profile:',
+      getPnpProfileName(),
+      getActivePnpImgPoints()
+    );
 
     try {
       REFS.helper.init({
@@ -5198,7 +5291,7 @@
         canvas: document.getElementById('WebARRocksFaceCanvas'),
         canvasThree: document.getElementById('threeCanvas'),
         solvePnPObjPointsPositions: SOLVEPNP_OBJPOINTS,
-        solvePnPImgPointsLabels: ACTIVE_IMGPOINTS,
+        solvePnPImgPointsLabels: getActivePnpImgPoints(),
         landmarksStabilizerSpec: { beta: 5, forceFilterNNInputPxRange: nn.filter },
         rotationContraints: {
           order: 'YXZ',
@@ -5304,8 +5397,11 @@
     console.log('[recreate-shell] asset base:', ASSET_BASE);
     STATE.cameraProfile = getInitialCameraProfile();
     STATE.physicsProfile = getInitialPhysicsProfile();
+    STATE.requestedPnpProfile = getRequestedPnpProfile();
+    STATE.pnpProfile = getInitialPnpProfile(STATE.requestedPnpProfile);
     console.log('[recreate-shell] video settings:', videoSettings());
     console.log('[recreate-shell] physics profile:', getPhysicsProfileName());
+    console.log('[recreate-shell] pnp profile:', getPnpProfileDebug());
 
     layoutCanvases(_videoAspect);
     runDependencyChecks();
